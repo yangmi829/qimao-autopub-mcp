@@ -1,0 +1,45 @@
+{
+  "name": "qimao-autopub-mcp",
+  "version": "0.1.0",
+  "description": "七猫小说（zuozhe.qimao.com）自动发布 MCP：登录 / 作品列表 / 新建作品 / 作品信息与标签 / 章节增删改与批量发布 / 短篇 / 数据与收益 / 本地文稿库",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "qimao-autopub-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "start:http": "node dist/index.js --http",
+    "smoke": "node scripts/smoke.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "qimao",
+    "qimao-novel",
+    "七猫",
+    "autopublish"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^4.6.7"
+  },
+  "optionalDependencies": {
+    "puppeteer-core": "^25.14.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

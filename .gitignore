@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+
+# 构建产物：dist/ 特意入库，便于 clone 后开箱即用（免 build）
+# dist/
+
+# 本地数据（cookies / 文稿 / 截图 / 任务）
+# ⚠️ data/ 下有有效的登录 cookies，绝不能提交
+data/*
+!data/.gitkeep
+
+# 环境变量
+.env
+
+# 编辑器/系统
+.vscode/
+.idea/
+Thumbs.db
+*.log
