@@ -39,6 +39,13 @@ export function shortManageUrl() {
     return `${authorBase()}/front/book-manage/short`;
 }
 /**
+ * 短篇渠道 `client_id`（真机 2026-10：短篇信息表单页把 `client_id` 写死为 `5`）。
+ * ⚠️ **不在 `book/client-list` 里**（那个接口只回 1=七猫中文网 / 3=纵横中文网）；
+ * 短篇的分类 / 标签选项也要用 `book-option?client_id=5`。
+ * 放在这里是为了让 `services/book.ts` 与 `services/shortStory.ts` 共用一份真身（避免循环 import）。
+ */
+export const SHORT_CLIENT_ID = "5";
+/**
  * ⚠️ 历史遗留名：早期误以为 `/front/book-upload/short` 是短篇创建页，实际它是
  * **短篇的章节编辑器**（路由名 `short-book-upload-editor`，meta.title 同为「作品管理-上传章节」）。
  */

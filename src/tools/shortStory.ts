@@ -59,7 +59,8 @@ export function registerShortStoryTools(server: McpServer): void {
         `在七猫短故事管理页驱动真实创建流程：列表页「新建短故事」→ 信息表单（目标读者/作品类型/标签/主角名/简介）→ 确认创建。` +
         `⚠️ 真机确认：短篇创建**没有站点选择弹窗**，点「新建短故事」直接跳信息表单页；短篇渠道由平台写死（client_id=5）。` +
         `⚠️ **只建「短篇壳」**；正文请建好后再用 publish_short_story_qimao（带 book_id）发布。\n` +
-        `未传的必填项会兜底填默认值（简介/主角名/标签/一级分类），必填门＝作品名+目标读者+一级分类+二级分类+简介+至少1个标签+至少1个主角名。\n` +
+        `未传的必填项会兜底填默认值（简介/主角名/标签），必填门＝作品名+目标读者+一级分类+二级分类+简介+至少1个标签+至少1个主角名。\n` +
+        `⚠️ 分类名**未匹配会中止报错**（不会静默改成别的分类）；短篇分类请先用 list_book_options_qimao(client_id="5") 查准确名称。\n` +
         `经验字数区间 ${SHORT_MIN_WORDS}–${SHORT_MAX_WORDS} 字（最佳 ${SHORT_BEST_RANGE}，以平台实际规则为准，本工具只提示不硬拦）。\n` +
         `默认 confirm=false 只打开短故事管理页 + 截图，不点按钮不填表；confirm=true 才真正创建。`,
       inputSchema: {
@@ -68,8 +69,8 @@ export function registerShortStoryTools(server: McpServer): void {
         content: z.string().optional().describe("正文（仅用于字数提示；本工具不写正文）"),
         file_path: z.string().optional().describe("正文文件路径（仅用于字数提示）"),
         article_id: z.string().optional().describe("本地文稿库 article_id（仅用于字数提示）"),
-        category: z.string().optional().describe("一级分类名称（缺省取第一个，可先用 list_book_options_qimao 看选项）"),
-        category_sub: z.string().optional().describe("二级分类名称（缺省取该一级的第一个）"),
+        category: z.string().optional().describe("一级分类名称（**未匹配即中止**，不再静默取第一个；先用 list_book_options_qimao(client_id=\"5\") 查）"),
+        category_sub: z.string().optional().describe("二级分类名称（同上：未匹配即中止）"),
         tags: z.array(z.string()).optional().describe("标签名称，按分组顺序取用；缺省时每个分组各取第一个"),
         abstract: z.string().optional().describe("作品简介"),
         protagonist1: z.string().optional().describe("主角名（缺省填「主角」）"),

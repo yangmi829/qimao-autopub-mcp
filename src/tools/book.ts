@@ -64,8 +64,8 @@ export function registerBookTools(server: McpServer): void {
         abstract: z.string().optional().describe("作品简介（未传则填默认占位）"),
         protagonist1: z.string().optional().describe("主角名1（未传则填「主角」）"),
         protagonist2: z.string().optional().describe("主角名2"),
-        category: z.string().optional().describe("一级分类名称（未传/未匹配则取第一个，见 list_book_options_qimao）"),
-        category_sub: z.string().optional().describe("二级分类名称（未传/未匹配则取该一级的第一个）"),
+        category: z.string().optional().describe("一级分类名称（**未匹配会中止报错，不再静默取第一项**；先用 list_book_options_qimao(client_id=…) 查准确名称）"),
+        category_sub: z.string().optional().describe("二级分类名称（同上：未匹配即中止）"),
         tags: tagShape.describe("标签名称（按分组顺序取用；未传则每个分组各取第一个）"),
         confirm: z.boolean().optional().describe("是否真正提交建书，默认 false"),
         headless: z.boolean().optional().describe("是否无头运行，默认 true"),
@@ -111,17 +111,18 @@ export function registerBookTools(server: McpServer): void {
     {
       title: "修改已有作品信息（书名 / 简介 / 主角 / 分类 / 标签）",
       description:
-        "改已有作品的名称 / 简介 / 主角名 / 分类 / 标签。走作品信息页 `/front/book-manage/information?id=…`；只覆盖显式传入的字段。\n" +
-        "⚠️ 默认 confirm=false 只打开作品信息页**读现状 + 截图，完全不填充**（避免误改线上）；confirm=true 才填表并保存。\n" +
+        "改已有作品的名称 / 简介 / 主角名 / 分类 / 标签。**长篇走作品信息页，短篇自动走短篇信息页**（按 book_id 判定，短篇渠道 client_id=5）；只覆盖显式传入的字段。\n" +
+        "⚠️ 默认 confirm=false 只打开页面**读现状 + 截图，完全不填充**（避免误改线上）；confirm=true 才填表并保存。\n" +
+        "⚠️ 分类名没匹配上会**中止并返回可选值**（不会静默改成别的分类）；保存按钮按「保存/确认修改/立即修改/提交/确认」多候选 + 兜底扫描点击，全落空时返回页面上的按钮清单。\n" +
         "改书名 / 简介可能触发重新审核、影响曝光，请谨慎。",
       inputSchema: {
-        book_id: z.string().describe("七猫书 ID（book_id）"),
+        book_id: z.string().describe("七猫书 ID（book_id；长篇短篇都行）"),
         book_name: z.string().optional().describe("作品名称（不给＝不改；含非法字符会自动清洗）"),
         abstract: z.string().optional().describe("作品简介（不给＝不改）"),
         protagonist1: z.string().optional().describe("主角名1（不给＝不改）"),
         protagonist2: z.string().optional().describe("主角名2（不给＝不改）"),
-        category: z.string().optional().describe("一级分类名称（不给＝不改）"),
-        category_sub: z.string().optional().describe("二级分类名称（不给＝不改）"),
+        category: z.string().optional().describe("一级分类名称（不给＝不改；未匹配即中止，短篇用 client_id=5 查选项）"),
+        category_sub: z.string().optional().describe("二级分类名称（不给＝不改；未匹配即中止）"),
         tags: tagShape.describe("标签名称（按分组顺序取用；不给＝不改）"),
         confirm: z.boolean().optional().describe("是否真正提交，默认 false（只读预览）"),
         headless: z.boolean().optional().describe("是否无头运行，默认 true"),
@@ -182,12 +183,23 @@ export function registerBookTools(server: McpServer): void {
       title: "列出作品分类 / 标签选项",
       description:
         "读取七猫后台的作品分类（一级 + 二级 children）与标签可选项（按风格/角色/情节/背景分组），供建书 / 改作品信息时选值。只读 HTTP。\n" +
-        "⚠️ 分类随站点不同：用 client_id 指定（1=七猫中文网 默认，3=纵横中文网）。返回的 genders[0]=男频、[1]=女频。",
+        "⚠️ 分类随站点不同：用 client_id 指定（1=七猫中文网 默认，3=纵横中文网，**5=短篇**）。返回的 genders[0]=男频、[1]=女频。\n" +
+        "⚠️ 默认只回分类（only=category），不再把 405 个标签全塞回来（旧版一次 132k 字符会被客户端截断、等于看不到结果）。\n" +
+        "标签挂在顶层 tagGroups[].tags（男/女频是同一份，只回一次）；默认只回 tagGroups 概览（分组名+数量），要标签本体传 only=tag；要分类扁平路径传 flat=true。",
       inputSchema: {
-        client_id: z.string().optional().describe("站点 client_id：1=七猫中文网（默认），3=纵横中文网"),
+        client_id: z.string().optional().describe("站点 client_id：1=七猫中文网（默认），3=纵横中文网，5=短篇"),
+        only: z
+          .enum(["category", "tag", "all"])
+          .optional()
+          .describe("只回哪部分：category=只要分类（默认，输出最小）；tag=只要标签；all=都要（很长，慎用）"),
+        gender: z.number().int().min(0).max(1).optional().describe("只看某个频道：0=男频，1=女频（不传＝两组都回）"),
+        flat: z.boolean().optional().describe("是否额外回一份扁平分类路径（一级/二级），默认 false"),
       },
     },
-    async (args) => fromService((await listBookOptions({ clientId: args.client_id })) as any)
+    async (args) =>
+      fromService(
+        (await listBookOptions({ clientId: args.client_id, only: args.only, gender: args.gender, flat: args.flat })) as any
+      )
   );
 
   server.registerTool(

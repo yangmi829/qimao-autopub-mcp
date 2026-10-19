@@ -1,8 +1,8 @@
 import { logger } from "../core/logger.js";
 import { sleep, shot } from "../browser/driver.js";
-import { API, apiGet, openSession, isError, bookManageUrl, createBookUrl, bookInfoUrl, authorBase } from "../browser/endpoints.js";
+import { API, apiGet, openSession, isError, bookManageUrl, createBookUrl, bookInfoUrl, shortStoryInfoUrl, SHORT_CLIENT_ID, authorBase } from "../browser/endpoints.js";
 import { fillByLabel, readForm } from "../browser/form.js";
-import { realClickText, realClickByJs, realTypeByJs, clickVisibleOption, visibleModalText, } from "../browser/page.js";
+import { realClickText, realClickByJs, realTypeByJs, clickVisibleOption, visibleSelectOptions, visibleModalText, } from "../browser/page.js";
 import { assertCookies } from "./auth.js";
 import { cleanBookTitle } from "../core/text.js";
 /** 容错取值：在不同命名（后端字段名未公开）中取第一个命中的 */
@@ -116,13 +116,25 @@ function jsTagInGroup(groupIndex, name) {
 /** 作品名称 / 作品简介 / 主角名的定位表达式（建书页与作品信息页是同一套结构） */
 const EXPR_TITLE = `(()=>{const el=document.querySelector(".qm-highlight-textarea");if(!el)return null;el.scrollIntoView({block:"center"});const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`;
 const EXPR_DESC = `(()=>{const el=document.querySelector(".q-contenteditable");if(!el)return null;el.scrollIntoView({block:"center"});const r=el.getBoundingClientRect();return{x:r.x+40,y:r.y+18};})()`;
+/** 下拉浮层里「第一个选项」的坐标表达式（仅在调用方明确允许兜底时使用） */
+function jsFirstVisibleOption(listIndex) {
+    const pick = listIndex === "first" ? "[0]" : ".pop()";
+    return `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const dd=Array.from(document.querySelectorAll(".el-select-dropdown")).filter(vis)${pick};const it=dd?.querySelector(".el-select-dropdown__item");if(!it)return null;it.scrollIntoView({block:"center"});const r=it.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`;
+}
 /**
- * 填写作品信息字段（建书页 / 作品信息页共用；两页是同一套 DOM 结构）。
+ * 填写作品信息字段（建书页 / 作品信息页 / 短篇信息页共用；三页是同一套 DOM 结构）。
  *
  * 只填**显式传入**的字段；未传的保持原样（建书时由调用方补默认值）。
  * ⚠️ 必须真实键鼠（Vue 2 + 类 Element-UI 不认 JS 赋 value），且必须「先清空再输入」。
+ *
+ * ⚠️ 分类语义（2026-10 修）：**显式传入的分类名没匹配上时，默认不兜底取第一项**，
+ * 而是记 `missing` + 返回 `categoryOk=false`，由调用方中止整个写操作。
+ * 旧行为是「静默取第一项，顶层仍 `ok:true`」——出了一次「分类填错但报成功」的事故。
  */
-export async function fillBookInfoFields(page, opts, filled, missing, labelSuffix = "") {
+export async function fillBookInfoFields(page, opts, filled, missing, labelSuffix = "", options = {}) {
+    const strict = options.strictCategory !== false;
+    let categoryOk = true;
+    const availHint = (avail) => avail.length ? `；可选：${avail.slice(0, 12).join("/")}${avail.length > 12 ? "…" : ""}` : "";
     // 作品名称
     if (opts.bookName !== undefined && opts.bookName !== "") {
         if (await realTypeByJs(page, EXPR_TITLE, opts.bookName, 40))
@@ -136,14 +148,27 @@ export async function fillBookInfoFields(page, opts, filled, missing, labelSuffi
         const pickedL1 = await realClickByJs(page, jsFormItemControl("作品类型", ".el-select", 0));
         if (!pickedL1) {
             missing.push("category(作品类型-一级)");
+            categoryOk = false;
         }
         else {
             await sleep(1100);
-            const l1 = opts.category ?? "";
-            if (!(l1 && (await clickVisibleOption(page, l1)))) {
-                await realClickByJs(page, `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const dd=Array.from(document.querySelectorAll(".el-select-dropdown")).filter(vis)[0];const it=dd?.querySelector(".el-select-dropdown__item");if(!it)return null;const r=it.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-                if (l1)
-                    missing.push(`category(一级分类「${l1}」未匹配，已取第一项)`);
+            const l1 = (opts.category ?? "").trim();
+            let l1Ok = true;
+            if (l1 && (await clickVisibleOption(page, l1))) {
+                // 命中，什么都不用做
+            }
+            else if (l1) {
+                const avail = await visibleSelectOptions(page);
+                await page.keyboard.press("Escape").catch(() => { });
+                l1Ok = false;
+                categoryOk = false;
+                missing.push(`category(一级分类「${l1}」未匹配${strict ? "，已中止（未提交）" : "，已取第一项"}${availHint(avail)})`);
+                if (!strict)
+                    await realClickByJs(page, jsFirstVisibleOption("first"));
+            }
+            else {
+                // 未指定一级分类 → 保留旧行为：取第一项（调用方会在 notes 里说明）
+                await realClickByJs(page, jsFirstVisibleOption("first"));
             }
             await sleep(1500);
             const l1Text = await page.evaluate(() => {
@@ -152,13 +177,22 @@ export async function fillBookInfoFields(page, opts, filled, missing, labelSuffi
             });
             if (l1Text)
                 filled["作品类型-一级"] = String(l1Text);
-            if (await realClickByJs(page, jsFormItemControl("作品类型", ".el-select", 1))) {
+            if (l1Ok && (await realClickByJs(page, jsFormItemControl("作品类型", ".el-select", 1)))) {
                 await sleep(1100);
-                const sub = opts.categorySub ?? "";
-                if (!(sub && (await clickVisibleOption(page, sub)))) {
-                    await realClickByJs(page, `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const dd=Array.from(document.querySelectorAll(".el-select-dropdown")).filter(vis).pop();const it=dd?.querySelector(".el-select-dropdown__item");if(!it)return null;const r=it.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-                    if (sub)
-                        missing.push(`categorySub(二级分类「${sub}」未匹配，已取第一项)`);
+                const sub = (opts.categorySub ?? "").trim();
+                if (sub && (await clickVisibleOption(page, sub))) {
+                    // 命中
+                }
+                else if (sub) {
+                    const avail = await visibleSelectOptions(page);
+                    await page.keyboard.press("Escape").catch(() => { });
+                    categoryOk = false;
+                    missing.push(`categorySub(二级分类「${sub}」未匹配${strict ? "，已中止（未提交）" : "，已取第一项"}${availHint(avail)})`);
+                    if (!strict)
+                        await realClickByJs(page, jsFirstVisibleOption("last"));
+                }
+                else {
+                    await realClickByJs(page, jsFirstVisibleOption("last"));
                 }
                 await sleep(1200);
                 const l2Text = await page.evaluate(() => {
@@ -168,8 +202,10 @@ export async function fillBookInfoFields(page, opts, filled, missing, labelSuffi
                 if (l2Text)
                     filled["作品类型-二级"] = String(l2Text);
             }
-            else
+            else if (l1Ok) {
                 missing.push("categorySub(作品类型-二级)");
+                categoryOk = false;
+            }
         }
     }
     // 作品简介（contenteditable）
@@ -221,6 +257,7 @@ export async function fillBookInfoFields(page, opts, filled, missing, labelSuffi
         else
             missing.push("tags(作品标签入口)");
     }
+    return { categoryOk };
 }
 /**
  * 读作品信息表单的 Vue 状态（前端内部结构，仅供排障 / 判门禁用，取不到就返回 null）。
@@ -346,7 +383,7 @@ export async function createBook(input) {
             notes.push("未指定标签，已按分组各取第一个");
         if (!input.category)
             notes.push("未指定分类，已取第一个一级分类");
-        await fillBookInfoFields(page, {
+        const fillRes = await fillBookInfoFields(page, {
             bookName: safeName,
             category: input.category ?? "",
             categorySub: input.categorySub ?? "",
@@ -355,6 +392,20 @@ export async function createBook(input) {
             protagonist2: input.protagonist2?.trim(),
             tags: input.tags?.length ? input.tags : [""],
         }, filled, missing);
+        // ⚠️ 显式传入的分类没匹配上 → 直接中止，绝不静默兜底（避免「报成功但分类是错的」）
+        if (!fillRes.categoryOk) {
+            const shotPath = await shot(page, "book-create-category-mismatch");
+            await browser.close().catch(() => { });
+            return {
+                ok: false,
+                action: "error",
+                message: `分类未匹配，已中止建书（**未提交**）：${missing.join("；")}。` +
+                    `请先用 list_book_options_qimao(client_id=…) 查可选分类名后重试。`,
+                screenshotPath: shotPath,
+                filled,
+                missing,
+            };
+        }
         // --- 9. 提交前读门禁（拿不到 Vue 状态就跳过，不影响主流程） ---
         const state = await readCreateFormState(page);
         if (state?.disabled) {
@@ -430,6 +481,69 @@ export async function createBook(input) {
         return { ok: false, action: "error", message: `建书异常：${e.message}` };
     }
 }
+/* ------------------------------ 改作品信息 ------------------------------ */
+/** 该 `book_id` 是不是短篇（短篇渠道 `client_id` 页面写死为 5，且不在 `book/client-list` 里） */
+async function isShortBook(bookId) {
+    const r = await apiGet(API.bookDetail, { book_id: bookId });
+    if (!r.ok)
+        return false;
+    const d = r.data ?? {};
+    const cid = String(d?.book_info?.client_id ?? d?.book_info?.clientId ?? "");
+    return cid === SHORT_CLIENT_ID;
+}
+/** 页面上可见的按钮文本（排障用：保存按钮候选全落空时，把现场按钮如实回给调用方） */
+async function visibleButtonTexts(page) {
+    return (await page
+        .evaluate(() => {
+        const vis = (e) => {
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        return Array.from(document.querySelectorAll("a.qm-btn,button,.el-button"))
+            .filter(vis)
+            .map((e) => (e.innerText ?? e.textContent ?? "").trim())
+            .filter(Boolean)
+            .slice(0, 20);
+    })
+        .catch(() => []));
+}
+/**
+ * 点「保存」类按钮：先按候选文本精确点，再兜底扫「含 保存/修改/提交/确认 的可见按钮」。
+ *
+ * ⚠️ 真机踩坑（2026-10）：短篇信息页的保存按钮在页面底部，且文案与长篇不同
+ * （长篇的候选是 保存/提交/立即修改/确认）→ 之前直接按文本点，报「已填表但未找到保存按钮」。
+ * 这里统一走 `realClickText` / `realClickByJs`（都会先 `scrollIntoView`），并把命中的文案回传。
+ */
+async function clickInfoSaveButton(page, candidates) {
+    for (const t of candidates) {
+        if (await realClickText(page, t, { exact: true }))
+            return t;
+    }
+    const pt = (await page
+        .evaluate(() => {
+        const vis = (e) => {
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const inDialog = (e) => !!e.closest?.(".el-dialog,.el-message-box,.g-pop,.qm-dialog");
+        const all = Array.from(document.querySelectorAll("a.qm-btn,button,.el-button"))
+            .filter(vis)
+            .filter((e) => !inDialog(e));
+        const hit = all.find((e) => /(确认修改|保存修改|立即修改)/.test(e.innerText ?? e.textContent ?? "")) ??
+            all.find((e) => /(保存|提交)/.test(e.innerText ?? e.textContent ?? "")) ??
+            all.find((e) => /确认/.test(e.innerText ?? e.textContent ?? ""));
+        if (!hit)
+            return null;
+        hit.scrollIntoView({ block: "center" });
+        const r = hit.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2, txt: (hit.innerText ?? hit.textContent ?? "").trim() };
+    })
+        .catch(() => null));
+    if (!pt)
+        return undefined;
+    await page.mouse.click(pt.x, pt.y);
+    return pt.txt;
+}
 /**
  * 修改已有作品信息（书名 / 简介 / 主角 / 分类 / 标签）。
  *
@@ -444,7 +558,9 @@ export async function createBook(input) {
  */
 export async function updateBookInfo(input) {
     assertCookies();
-    const path = bookInfoUrl(input.bookId);
+    const short = await isShortBook(input.bookId);
+    const path = short ? shortStoryInfoUrl(input.bookId) : bookInfoUrl(input.bookId);
+    const pageName = short ? "短篇信息页" : "作品信息页";
     const session = await openSession(input.headless ?? true, path);
     if (isError(session))
         return { ok: false, action: "error", message: session.error };
@@ -457,7 +573,7 @@ export async function updateBookInfo(input) {
             return {
                 ok: true,
                 action: "preview",
-                message: `已打开作品信息页（confirm=false，未做任何修改）。现状：${JSON.stringify(current).slice(0, 400)}`,
+                message: `已打开${pageName}（${short ? "预判为短篇，走 /front/book-manage/short/information" : "长篇"}，confirm=false，未做任何修改）。现状：${JSON.stringify(current).slice(0, 400)}`,
                 screenshotPath: shotPath,
                 filled: current,
             };
@@ -468,7 +584,7 @@ export async function updateBookInfo(input) {
         if (input.bookName && safeName !== input.bookName.trim()) {
             missing.push(`bookName(已按平台字符白名单清洗为「${safeName}」)`);
         }
-        await fillBookInfoFields(page, {
+        const fillRes = await fillBookInfoFields(page, {
             bookName: input.bookName ? safeName : undefined,
             abstract: input.abstract,
             protagonist1: input.protagonist1,
@@ -477,19 +593,42 @@ export async function updateBookInfo(input) {
             categorySub: input.categorySub,
             tags: input.tags,
         }, filled, missing);
-        const clicked = (await realClickText(page, "保存", { exact: true })) ||
-            (await realClickText(page, "提交", { exact: true })) ||
-            (await realClickText(page, "立即修改", { exact: true })) ||
-            (await realClickText(page, "确认", { exact: true }));
+        // ⚠️ 显式传入的分类没匹配上 → 中止（不提交），别把错配的分类写上线
+        if (!fillRes.categoryOk) {
+            const shotPath = await shot(page, "book-info-category-mismatch");
+            await browser.close().catch(() => { });
+            return {
+                ok: false,
+                action: "error",
+                message: `分类未匹配，已中止保存（**线上未改动**）：${missing.join("；")}。` +
+                    `请先用 list_book_options_qimao(client_id=…或 5) 查可选分类名后重试。`,
+                screenshotPath: shotPath,
+                filled,
+                missing,
+            };
+        }
+        const clicked = await clickInfoSaveButton(page, ["保存", "确认修改", "保存修改", "立即修改", "提交", "确认"]);
         const modal = await visibleModalText(page);
         const shotPath = await shot(page, "book-info-done");
+        if (!clicked) {
+            const buttons = await visibleButtonTexts(page);
+            await browser.close().catch(() => { });
+            return {
+                ok: false,
+                action: "error",
+                message: `已填表但未找到保存按钮（${pageName}）。缺：${missing.join("/") || "无"}。` +
+                    `页面可见按钮：${buttons.join(" / ") || "（未读到）"}。请把这份按钮清单反馈给开发者补候选文案。`,
+                screenshotPath: shotPath,
+                filled,
+                missing,
+            };
+        }
         await browser.close().catch(() => { });
         return {
-            ok: clicked,
-            action: clicked ? "updated" : "error",
-            message: clicked
-                ? `已提交作品信息修改（bookId=${input.bookId}）。已填：${Object.keys(filled).join("/") || "无"}。${missing.length ? `注意：${missing.join("/")}。` : ""}${modal ? `页面提示：${modal.slice(0, 200)}` : ""}`
-                : `已填表但未找到保存按钮。缺：${missing.join("/") || "无"}。`,
+            ok: true,
+            action: "updated",
+            message: `已提交${pageName}修改（bookId=${input.bookId}，点了「${clicked}」）。已填：${Object.keys(filled).join("/") || "无"}。` +
+                `${missing.length ? `注意：${missing.join("/")}。` : ""}${modal ? `页面提示：${modal.slice(0, 200)}` : ""}`,
             screenshotPath: shotPath,
             filled,
             missing,
@@ -521,10 +660,16 @@ export async function setBookTags(input) {
  * `data.category_list[is_girl]` = `{category:[{id, category_name, children:[{id, category_name}]}], tag_info:[{type_id, type_name, select_list:[{id, tag_id, tag_name}]}]}`，
  * 其中 **`category_list` 的下标与「目标读者」一致：0=男频，1=女频**（前端 `firstCategory` computed 即如此取）。
  * ⚠️ 必须带 `client_id`（不同站点分类不同）；不带参会拿到不完整数据。
+ *
+ * ⚠️ 2026-10 事故：默认把 405 个标签全塞进返回 → 132k 字符，MCP 客户端直接截断，
+ * 调用方「看不到返回值只能猜分类名」。现在默认 `only=category`（几十条分类），
+ * 标签只在 `only=tag`/`all` 时挂在顶层 `tagGroups[].tags`（且男/女频只回一份，不再重复一倍）。
  */
 export async function listBookOptions(opts = {}) {
     assertCookies();
-    const r = await apiGet(API.bookOption, { client_id: String(opts.clientId ?? "1") });
+    const clientId = String(opts.clientId ?? "1");
+    const only = opts.only ?? "category";
+    const r = await apiGet(API.bookOption, { client_id: clientId });
     if (!r.ok)
         return { ok: false, message: `读取分类/标签选项失败：${r.error}` };
     const d = r.data ?? {};
@@ -533,7 +678,7 @@ export async function listBookOptions(opts = {}) {
         tagId: String(x?.tag_id ?? x?.id ?? ""),
         name: String(x?.tag_name ?? x?.name ?? ""),
     });
-    const genders = (Array.isArray(d.category_list) ? d.category_list : []).map((c, index) => ({
+    const allGenders = (Array.isArray(d.category_list) ? d.category_list : []).map((c, index) => ({
         index,
         isGirl: String(index),
         categories: (Array.isArray(c?.category) ? c.category : [])
@@ -552,26 +697,65 @@ export async function listBookOptions(opts = {}) {
             tags: (Array.isArray(t?.select_list) ? t.select_list : []).map(toTag).filter((x) => x.name),
         })),
     }));
-    const seen = new Set();
-    const tags = [];
+    const genders = typeof opts.gender === "number" ? allGenders.filter((g) => g.index === opts.gender) : allGenders;
+    const wantCats = only === "category" || only === "all";
+    const wantTags = only === "tag" || only === "all";
+    // 标签与频道无关：男/女频的 tag_info 是同一份（405 个），按 gender 平铺会重复一倍。
+    // 这里按 `type_id` 合并、用 tagId 去重，只在顶层 `tagGroups` 出现一次（顺序＝平台分组顺序）。
+    const groupOrder = [];
+    const groupMap = new Map();
     for (const g of genders) {
         for (const grp of g.groups) {
+            let entry = groupMap.get(grp.typeId);
+            if (!entry) {
+                entry = { typeName: grp.typeName, seen: new Set(), tags: [] };
+                groupMap.set(grp.typeId, entry);
+                groupOrder.push(grp.typeId);
+            }
+            else if (!entry.typeName && grp.typeName) {
+                entry.typeName = grp.typeName;
+            }
             for (const t of grp.tags) {
                 const key = t.tagId || t.name;
-                if (seen.has(key))
+                if (entry.seen.has(key))
                     continue;
-                seen.add(key);
-                tags.push(t);
+                entry.seen.add(key);
+                entry.tags.push(t);
             }
         }
     }
+    const tagGroups = groupOrder.map((typeId) => {
+        const e = groupMap.get(typeId);
+        return { typeId, typeName: e.typeName, count: e.tags.length, ...(wantTags ? { tags: e.tags } : {}) };
+    });
+    const outGenders = genders.map((g) => ({
+        index: g.index,
+        isGirl: g.isGirl,
+        categories: wantCats ? g.categories : [],
+    }));
+    const categoryPaths = opts.flat
+        ? genders.flatMap((g) => g.categories.flatMap((c) => [
+            `[${g.isGirl}频] ${c.name}`,
+            ...c.children.map((k) => `[${g.isGirl}频] ${c.name}/${k.name}`),
+        ]))
+        : undefined;
     const catCount = genders.reduce((n, g) => n + g.categories.reduce((m, c) => m + 1 + c.children.length, 0), 0);
+    const tagCount = tagGroups.reduce((n, g) => n + g.count, 0);
+    const scope = opts.gender === undefined ? "" : `（只看 ${opts.gender === 1 ? "女频" : "男频"}）`;
+    const tail = only === "category"
+        ? `本次只回分类（分类树足够选值；默认不再带 ${tagCount} 个标签，避免超过输出上限）。需要标签时传 only=tag。`
+        : only === "tag"
+            ? `本次只回标签（共 ${tagCount} 个去重，见 tagGroups[].tags）。需要分类树时传 only=category。`
+            : `本次 only=all：分类与标签都回了，注意上下文占用。`;
     return {
         ok: true,
-        message: `已读取分类/标签选项（client_id=${opts.clientId ?? "1"}）：${genders.length} 组（0=男频/1=女频）、` +
-            `${catCount} 个分类（含二级）、去重后 ${tags.length} 个标签。`,
-        genders,
-        tags,
+        message: `已读取分类/标签选项（client_id=${clientId}）${scope}：${genders.length} 组（0=男频/1=女频）、` +
+            `${catCount} 个分类（含二级）、标签共 ${tagCount} 个（分 ${tagGroups.length} 组）。${tail}`,
+        clientId,
+        only,
+        genders: outGenders,
+        tagGroups,
+        categoryPaths,
         activities: d.book_activity_list ?? null,
         extra: {
             book_config: d.book_config,

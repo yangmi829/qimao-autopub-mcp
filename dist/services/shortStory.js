@@ -1,5 +1,5 @@
 import { sleep, shot } from "../browser/driver.js";
-import { API, apiGet, openSession, isError, authorBase, shortManageUrl, shortChapterEditUrl, } from "../browser/endpoints.js";
+import { API, apiGet, openSession, isError, authorBase, shortManageUrl, shortChapterEditUrl, SHORT_CLIENT_ID, } from "../browser/endpoints.js";
 import { readForm } from "../browser/form.js";
 import { realClickText, realClickByJs, fillInput, visibleModalText, visibleToastText, acceptPublishConfirm, clickAgreementIfPresent, waitForText } from "../browser/page.js";
 import { logger } from "../core/logger.js";
@@ -9,10 +9,9 @@ import { fillBookInfoFields, jsFormItemRadio, readCreateFormState } from "./book
 import { CHAPTER_SELECTORS, readEditorState } from "./chapter.js";
 /**
  * 短篇信息表单页写死的站点 `client_id`（真机 2026-10 读 `formData.client_id` = "5"）。
- * ⚠️ 这个 **不在 `book/client-list` 里**（那个接口只回 1=七猫中文网 / 3=纵横中文网），
- * 短篇是独立渠道；分类 / 标签选项也要用 `book-option?client_id=5` 取。
+ * 真身在 `browser/endpoints.ts`（`services/book.ts` 判「该 book_id 是不是短篇」也要用它），这里重新导出保持旧引用可用。
  */
-export const SHORT_CLIENT_ID = "5";
+export { SHORT_CLIENT_ID };
 /**
  * 七猫「短篇作品」。
  *
@@ -173,7 +172,7 @@ export async function createShortStory(input) {
             notes.push("未指定标签，已按分组各取第一个");
         if (!input.category)
             notes.push("未指定分类，已取第一个一级分类");
-        await fillBookInfoFields(page, {
+        const fillRes = await fillBookInfoFields(page, {
             bookName: safeName,
             category: input.category ?? "",
             categorySub: input.categorySub ?? "",
@@ -182,6 +181,21 @@ export async function createShortStory(input) {
             protagonist2: input.protagonist2?.trim(),
             tags: input.tags?.length ? input.tags : [""],
         }, filled, missing, "（短篇）");
+        // ⚠️ 显式传入的分类没匹配上 → 中止（不提交）。旧行为是「静默取第一项 + 顶层 ok:true」，
+        //    出过「建出来是 现代言情/总裁豪门，但工具报成功」的事故（只能删篇重建）。
+        if (!fillRes.categoryOk) {
+            const shotPath = await shot(page, "short-create-category-mismatch");
+            await browser.close().catch(() => { });
+            return {
+                ok: false,
+                action: "error",
+                message: `分类未匹配，已中止建篇（**未提交**）：${missing.join("；")}。` +
+                    `短篇分类请先用 list_book_options_qimao(client_id="5") 查准确名称后重试。`,
+                screenshotPath: shotPath,
+                filled,
+                missing,
+            };
+        }
         // 4) 提交前读门禁（拿不到 Vue 状态就跳过，不影响主流程）
         const state = await readCreateFormState(page);
         if (state?.disabled) {
@@ -513,10 +527,17 @@ export async function publishShortStory(input) {
             finalNotes.push(`写接口：${apiTrace.slice(-2).join(" ｜ ")}`);
         else if (!okSignal)
             finalNotes.push("未捕获写接口响应，请到短故事管理页复核");
+        // ⚠️ 口径说明：智能分章后编辑器会被重置，正文不再挂在编辑器里 →
+        //    「正文字数 0」是**正常现象**，真实字数以回读列表 / 平台页头为准（2026-10 事故：被当成「正文没上去」）。
+        const stateLabel = okSignal && mode === "publish"
+            ? `编辑器现状（发布/分章后已重置，这里「正文字数=0」属正常，真实字数见回读列表）`
+            : `编辑器现状`;
         return {
             ok: okSignal,
             action: okSignal ? action : "error",
-            message: `已点「${clicked}」（book_id=${input.bookId}）。${finalNotes.length ? finalNotes.join("；") + "。" : ""} 编辑器现状：${JSON.stringify(state)}。`,
+            message: `已点「${clicked}」（book_id=${input.bookId}）。${finalNotes.length ? finalNotes.join("；") + "。" : ""} ` +
+                stateLabel +
+                `：${JSON.stringify(state)}。`,
             screenshotPath: shotPath,
             bookId: input.bookId,
             filled: { ...filled, ...(verified !== undefined ? { 回读校验: verified ? "通过" : "未通过" } : {}) },
