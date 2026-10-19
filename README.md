@@ -94,9 +94,16 @@ npm i puppeteer             # 自带 Chromium（约 150MB）
 | 工具 | 说明 |
 | --- | --- |
 | `list_short_stories_qimao` / `get_short_story_qimao` | 短篇列表 / 详情 |
-| `create_short_story_qimao` | 新建短篇（默认只预览） |
-| `publish_short_story_qimao` | 发布短篇 |
-| `delete_short_story_qimao` | 删除短篇 / 草稿（默认预览） |
+| `create_short_story_qimao` | 新建短篇壳（名称 / 目标读者 / 分类 / 标签 / 主角名 / 简介；默认只预览） |
+| `publish_short_story_qimao` | 发正文（`mode=publish` 立即发布 / `mode=draft` 存草稿） |
+| `delete_short_story_qimao` | 删除短篇 / 草稿（默认预览；按书名定位该行再删） |
+
+短篇与长篇的差异（已在真机上确认）：
+
+- **短篇没有站点选择弹窗**：列表页点「新建短故事」直接进信息表单页，渠道由平台写死（`client_id=5`，不在 `book/client-list` 里）。
+- **短篇没有独立的章节名**：正文编辑器里标题＝作品名，正文内小标题靠工具栏把「正文」切成「标题」样式。
+- **正文字数门 4000–70000 字**（来自 `/api/pc/v1/global/config` 的 `client_config[5].word_count`，与页面文案一致）。
+- **发布要过三步**：①「立即发布」→ 弹「章节格式不满足发布要求，是否智能分章？」→「开始拆分」；②「智能分章结果」→「保存分章结果」；③ 再「立即发布」→ 平台查重（重复率高会直接拦下）→ 两层确认。`mode=draft` 只需「存为草稿」。
 
 ### 数据 / 收益（只读 HTTP）
 | 工具 | 说明 |
@@ -166,11 +173,12 @@ node scripts/mcp-cli.mjs --res qimao://publish-rules
 
 ## 十一、已知限制
 
-- **只读链路已真机联调通过**（登录 / 状态 / 作品列表 / 分类标签 / 数据统计 / 收益）；**写接口尚未真机联调**：建书页 / 作品信息页 / 章节编辑器 / 短篇页的 label 与按钮文案以真机为准，工具已按 label 文本做多候选匹配，未命中的字段会回在 `missing` 里（不会静默忽略）。
-- **作品列表分页是游标**：`list_books_qimao` / `list_short_stories_qimao` 用 `next_id` 翻页（不是 `page_index`），响应里的 `nextId` 为空表示没有下一页。
-- `set_book_tags` 目前是空操作（`update_book_info_qimao` 尚未实现分类 / 标签分支）。
-- 短篇字数区间是**经验值**，只软提示不硬拦（平台真实规则在 `/api/pc/v1/global/config` 的 `client_config[].word_count` 里）。
-- 平台改版后，优先改 `src/browser/endpoints.ts`（路由 / 接口 / 签名）与各 `src/services/*.ts` 顶部的选择器 / label 候选。
+- **读与写都已在真机上联调通过**（2026-10）：只读＝登录 / 状态 / 作品与短篇列表 / 分类标签 / 数据统计 / 收益；写＝建书 / 改作品信息与标签 / 章节增删改与发布 / 短篇建篇·发正文·删篇。
+- 写工具仍按「候选 label / 候选按钮文案」匹配平台控件，**未命中的字段会回在返回值的 `missing` 里**（不会静默忽略）——平台改版时先看它。
+- **作品列表分页是游标**：`list_books_qimao` / `list_short_stories_qimao` 用 `next_id` 翻页（不是 `page_index`），响应里的 `next_id` 为空表示没有下一页。
+- **长篇的书没有删除工具**（只有章节 / 短篇能删）；平台侧对应 `POST /api/pc/v1/book/del-book`，需要时走小说列表页每行的「删除」→「永久删除」。
+- 短篇字数门取平台配置（4000–70000），但**查重（重复率）不预检**：重复率过高时平台会在发布步骤直接拦下，返回值里会带上原文案。
+- 平台改版后，优先改 `src/browser/endpoints.ts`（路由 / 接口 / 签名）与各 `src/services/*.ts` 里的选择器 / label 候选数组。
 
 ## License
 

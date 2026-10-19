@@ -52,17 +52,21 @@ export function registerBookTools(server: McpServer): void {
     {
       title: "新建作品（建书）",
       description:
-        "在七猫作者后台驱动真实建书页填表并提交。必填 book_name；可选 gender（1=男频 0=女频）、abstract、主角名、category。\n" +
-        "⚠️ 七猫建书页的字段 label / 必填项以真机为准：本工具按 label 文本匹配填表，未命中的字段会回在 missing 里（不静默忽略）。\n" +
-        "默认 confirm=false 只打开建书页读现状 + 截图，不填不提交；confirm=true 才填表并点提交。",
+        "在七猫作者后台驱动真实建书流程：列表页「新建小说」→ 选首发站点 → 作品信息表单 →「确认创建」。必填 book_name。\n" +
+        "⚠️ 平台**硬性必填**（缺一个「确认创建」就永远灰着）：书名 / 目标读者 / 一级分类 / 二级分类 / 简介 / 至少1个标签 / 至少1个主角名。" +
+        "未传的会填默认值（默认值会在返回的 filled 里如实标出，可事后用 update_book_info_qimao 改）。\n" +
+        "书名有字符白名单（中英文 / 数字 / 罗马数字 / 中文标点），如含全角括号等会被自动清洗，结果在返回里提示。\n" +
+        "默认 confirm=false 只打开作品管理列表页 + 截图，不点按钮不填表；confirm=true 才真正建书（返回 book_id）。",
       inputSchema: {
-        book_name: z.string().describe("书名（必填）"),
-        gender: z.number().int().min(0).max(1).optional().describe("频道：1=男频，0=女频"),
-        abstract: z.string().optional().describe("作品简介"),
-        protagonist1: z.string().optional().describe("主角名1"),
+        book_name: z.string().describe("书名（必填；平台限 18 字，非法字符会自动清洗）"),
+        gender: z.number().int().min(0).max(1).optional().describe("频道：1=男频（默认），0=女频"),
+        client_id: z.string().optional().describe("首发站点 client_id：1=七猫中文网（默认），3=纵横中文网（用 book/client-list 查其它）"),
+        abstract: z.string().optional().describe("作品简介（未传则填默认占位）"),
+        protagonist1: z.string().optional().describe("主角名1（未传则填「主角」）"),
         protagonist2: z.string().optional().describe("主角名2"),
-        category: z.string().optional().describe("作品分类（一级/二级名称，以 list_book_options_qimao 为准）"),
-        tags: tagShape.describe("作品标签"),
+        category: z.string().optional().describe("一级分类名称（未传/未匹配则取第一个，见 list_book_options_qimao）"),
+        category_sub: z.string().optional().describe("二级分类名称（未传/未匹配则取该一级的第一个）"),
+        tags: tagShape.describe("标签名称（按分组顺序取用；未传则每个分组各取第一个）"),
         confirm: z.boolean().optional().describe("是否真正提交建书，默认 false"),
         headless: z.boolean().optional().describe("是否无头运行，默认 true"),
         register_local: z.boolean().optional().describe("建书成功后是否登记到本地小说（默认 true）"),
@@ -72,10 +76,12 @@ export function registerBookTools(server: McpServer): void {
       const r = await createBook({
         bookName: args.book_name,
         gender: args.gender,
+        clientId: args.client_id,
         abstract: args.abstract,
         protagonist1: args.protagonist1,
         protagonist2: args.protagonist2,
         category: args.category,
+        categorySub: args.category_sub,
         tags: args.tags,
         confirm: args.confirm,
         headless: args.headless,
@@ -91,6 +97,7 @@ export function registerBookTools(server: McpServer): void {
           protagonist2: args.protagonist2,
           category: args.category,
           tags: args.tags,
+          qimaoBookId: r.bookId,
           createdAt: now,
           updatedAt: now,
         });
@@ -102,18 +109,20 @@ export function registerBookTools(server: McpServer): void {
   server.registerTool(
     "update_book_info_qimao",
     {
-      title: "修改已有作品信息（书名 / 简介 / 主角 / 分类）",
+      title: "修改已有作品信息（书名 / 简介 / 主角 / 分类 / 标签）",
       description:
-        "改已有作品的名称 / 简介 / 主角名 / 分类。走作品信息页；只覆盖显式传入的字段。\n" +
+        "改已有作品的名称 / 简介 / 主角名 / 分类 / 标签。走作品信息页 `/front/book-manage/information?id=…`；只覆盖显式传入的字段。\n" +
         "⚠️ 默认 confirm=false 只打开作品信息页**读现状 + 截图，完全不填充**（避免误改线上）；confirm=true 才填表并保存。\n" +
         "改书名 / 简介可能触发重新审核、影响曝光，请谨慎。",
       inputSchema: {
         book_id: z.string().describe("七猫书 ID（book_id）"),
-        book_name: z.string().optional().describe("作品名称（不给＝不改）"),
+        book_name: z.string().optional().describe("作品名称（不给＝不改；含非法字符会自动清洗）"),
         abstract: z.string().optional().describe("作品简介（不给＝不改）"),
         protagonist1: z.string().optional().describe("主角名1（不给＝不改）"),
         protagonist2: z.string().optional().describe("主角名2（不给＝不改）"),
-        category: z.string().optional().describe("作品分类（不给＝不改）"),
+        category: z.string().optional().describe("一级分类名称（不给＝不改）"),
+        category_sub: z.string().optional().describe("二级分类名称（不给＝不改）"),
+        tags: tagShape.describe("标签名称（按分组顺序取用；不给＝不改）"),
         confirm: z.boolean().optional().describe("是否真正提交，默认 false（只读预览）"),
         headless: z.boolean().optional().describe("是否无头运行，默认 true"),
       },
@@ -126,6 +135,8 @@ export function registerBookTools(server: McpServer): void {
         protagonist1: args.protagonist1,
         protagonist2: args.protagonist2,
         category: args.category,
+        categorySub: args.category_sub,
+        tags: args.tags,
         confirm: args.confirm,
         headless: args.headless,
       });
@@ -137,23 +148,25 @@ export function registerBookTools(server: McpServer): void {
   server.registerTool(
     "set_book_tags",
     {
-      title: "设置作品标签",
+      title: "设置作品标签 / 分类",
       description:
-        "为已有作品设置分类 / 标签（复用 update_book_info_qimao 的页面链路）。语义是「确保这些标签处于选中」，已选中的会跳过。\n" +
+        "为已有作品设置分类 / 标签（复用 update_book_info_qimao 的作品信息页链路）。语义是「确保这些分类 / 标签处于选中」。\n" +
         "默认 confirm=false 只打开页面填表 + 截图（不提交）；confirm=true 才保存。",
       inputSchema: {
         book_id: z.string().describe("七猫书 ID"),
-        category: z.string().optional().describe("作品分类（确保处于选中状态）"),
-        tags: tagShape.describe("作品标签（确保处于选中状态）"),
+        category: z.string().optional().describe("一级分类名称（确保处于选中状态）"),
+        category_sub: z.string().optional().describe("二级分类名称（确保处于选中状态）"),
+        tags: tagShape.describe("标签名称（确保处于选中状态）"),
         confirm: z.boolean().optional().describe("是否真正提交，默认 false"),
         headless: z.boolean().optional().describe("是否无头运行，默认 true"),
       },
     },
     async (args) => {
-      if (!args.category && !(args.tags?.length)) return fail("请至少提供 category 或 tags。");
+      if (!args.category && !args.category_sub && !(args.tags?.length)) return fail("请至少提供 category / category_sub / tags 之一。");
       const r = await setBookTags({
         bookId: args.book_id,
         category: args.category,
+        categorySub: args.category_sub,
         tags: args.tags,
         confirm: args.confirm,
         headless: args.headless,
@@ -167,10 +180,14 @@ export function registerBookTools(server: McpServer): void {
     "list_book_options_qimao",
     {
       title: "列出作品分类 / 标签选项",
-      description: "读取七猫后台的作品分类与标签可选项（只读 HTTP），供建书 / 改作品信息时选值。",
-      inputSchema: {},
+      description:
+        "读取七猫后台的作品分类（一级 + 二级 children）与标签可选项（按风格/角色/情节/背景分组），供建书 / 改作品信息时选值。只读 HTTP。\n" +
+        "⚠️ 分类随站点不同：用 client_id 指定（1=七猫中文网 默认，3=纵横中文网）。返回的 genders[0]=男频、[1]=女频。",
+      inputSchema: {
+        client_id: z.string().optional().describe("站点 client_id：1=七猫中文网（默认），3=纵横中文网"),
+      },
     },
-    async () => fromService((await listBookOptions()) as any)
+    async (args) => fromService((await listBookOptions({ clientId: args.client_id })) as any)
   );
 
   server.registerTool(

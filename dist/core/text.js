@@ -39,6 +39,27 @@ export function stripHtml(html) {
 export function cleanChapterTitle(title) {
     return title.replace(/^第\s*[0-9一二三四五六七八九十百零]+\s*章[\s:：、.]*/u, "").trim();
 }
+/**
+ * 书名清洗。
+ *
+ * 真机（2026-10）实测：七猫建书页对书名有字符白名单，前端报错原文是
+ * 「仅支持中英文、数字（含罗马数字Ⅰ~Ⅻ）、及，：！？中文标点」——
+ * 例如「联调测试书（可删）」里的**全角括号（）会被拒**，`确认创建` 一直灰着。
+ *
+ * 因此在提交前按白名单过滤并截断到 18 字（平台的 `maxlength`）。
+ * 返回 `{ title, changed }`，`changed=true` 时调用方应在结果里提示用户。
+ */
+export const BOOK_TITLE_MAX = 18;
+export function cleanBookTitle(raw, maxLen = BOOK_TITLE_MAX) {
+    const src = String(raw ?? "");
+    // 白名单：汉字（含扩展 A）/ 罗马数字 / 英数 / 空格 / 平台明示允许的中文标点
+    const cleaned = src
+        .replace(/[^\u3400-\u4dbf\u4e00-\u9fff\u2160-\u216b\u3007A-Za-z0-9 ，：！？]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, maxLen);
+    return { title: cleaned, changed: cleaned !== src.trim() };
+}
 export function pad2(n) {
     return String(n).padStart(2, "0");
 }

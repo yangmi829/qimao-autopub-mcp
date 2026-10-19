@@ -1,10 +1,29 @@
 import { sleep, shot } from "../browser/driver.js";
-import { API, apiGet, openSession, isError, chapterEditUrl } from "../browser/endpoints.js";
-import { fillByLabel, readForm } from "../browser/form.js";
-import { realClickText, visibleModalText, waitForText, textOf } from "../browser/page.js";
+import { API, apiGet, openSession, isError, chapterEditUrl, chapterManageUrl, authorBase } from "../browser/endpoints.js";
+import { realClickText, visibleModalText, visibleToastText, acceptPublishConfirm, waitForText, textOf, fillInput } from "../browser/page.js";
 import { logger } from "../core/logger.js";
 import { assertCookies } from "./auth.js";
 import { cleanChapterTitle, countCjk, toPlainText } from "../core/text.js";
+/**
+ * 章节编辑器选择器（2026-10 真机确认）。
+ *
+ * ⚠️ 章节编辑器页面**没有 `.el-form-item`**（不是表单结构），所以 `fillByLabel` /
+ *    `readForm` 在这里一律失效——只能按结构定位。真机 DOM：
+ *    序号 `input.el-input__inner[maxlength=5]`、章节名 `textarea[placeholder*=章节名称]`
+ *    （maxlength 20）、正文 `div.q-contenteditable.book`、段尾「有话要说」`font-size-14`。
+ *    提交按钮是 `<a class="qm-btn …">`（**不是 `<button>`**）：`default`＝更新草稿 /
+ *    定时发布，`important`＝立即发布。
+ */
+export const CHAPTER_SELECTORS = {
+    index: 'input.el-input__inner[maxlength="5"]',
+    title: 'textarea[placeholder*="章节名称"]',
+    body: "div.q-contenteditable.book",
+    tail: 'div.q-contenteditable[class*="font-size-14"]',
+    indexFallback: 'input.el-input__inner[maxlength="5"]',
+};
+/** 平台正文字数门（`global/config` 的 `client_config[1].word_count[type=1]`：1000–50000），只做软提示 */
+export const CHAPTER_MIN_WORDS = 1000;
+export const CHAPTER_MAX_WORDS = 50000;
 function pick(obj, keys) {
     if (!obj || typeof obj !== "object")
         return undefined;
@@ -15,14 +34,16 @@ function pick(obj, keys) {
     }
     return undefined;
 }
-export function normalizeChapter(c) {
+export function normalizeChapter(c, isDraft = false) {
     return {
         chapterId: String(pick(c, ["chapter_id", "chapterId", "id", "cid"]) ?? ""),
-        chapterNumber: pick(c, ["chapter_num", "chapterNum", "sort", "index", "chapter_index"]),
-        title: String(pick(c, ["chapter_name", "chapterName", "title", "name"]) ?? ""),
-        words: pick(c, ["word_count", "wordCount", "words", "word_num"]),
+        chapterNumber: pick(c, ["chapter_index", "chapter_num", "chapterNum", "sort", "index"]),
+        title: String(pick(c, ["chapter_name", "chapter_name_txt", "chapterName", "title", "name"]) ?? ""),
+        words: pick(c, ["words_num", "word_count", "wordCount", "words", "word_num"]),
         status: pick(c, ["status_name", "statusName", "status", "publish_status"]),
         publishTime: pick(c, ["publish_time", "publishTime", "create_time", "update_time"]),
+        isDraft,
+        volumeId: pick(c, ["volume_id"]),
         raw: c,
     };
 }
@@ -36,36 +57,98 @@ function extractList(data) {
     return [];
 }
 /**
- * 读某本书的章节列表（只读 HTTP），用于复核与避重。
+ * 读某本书的章节列表（只读 HTTP）。
  *
- * ⚠️ 未联调：`book-chapter/list` 只传 `book_id` 会返回 `40001002 请求参数错误`（真机实测，2026-10），
- *    说明还需要别的参数（可能是 `type` / `tab_type` / 分页游标）——等有真实作品后再校准这里的入参。
+ * 真机（2026-10）校准的**完整**入参（只传 `book_id` 会报 `40001002 请求参数错误`）：
+ * `book_id, page, page_size, search_type=2, is_draft, tab_type, volume_id, order_type=2`。
+ * 响应：`{data:{list, data_total, chapter_total, draft_total, chapter_index_rule, …}}`。
+ *
+ * `tab=all`（默认）会拉「已发布 + 草稿」两次并合并——只读复核/避重需要看到草稿，
+ * 否则「新建章节」自动生成的空草稿会漏掉。
  */
 export async function listChapters(opts) {
     assertCookies();
-    const r = await apiGet(API.chapterList, {
-        book_id: opts.bookId,
-        page: (opts.pageIndex ?? 0) + 1,
-        page_size: opts.pageSize ?? 200,
-    });
-    if (!r.ok)
-        return { ok: false, message: `读取章节列表失败：${r.error}`, chapters: [] };
-    const list = extractList(r.data);
+    const page = opts.page ?? 1;
+    const pageSize = opts.pageSize ?? 100;
+    const volumeId = opts.volumeId ?? "0";
+    const tab = opts.tab ?? "all";
+    const fetchTab = async (which) => {
+        const r = await apiGet(API.chapterList, {
+            book_id: opts.bookId,
+            page: String(page),
+            chapter_name: "",
+            page_size: String(pageSize),
+            search_type: "2",
+            is_draft: which === "draft" ? "1" : "0",
+            tab_type: which === "draft" ? "1" : "0",
+            volume_id: volumeId,
+            order_type: "2",
+        });
+        return r;
+    };
+    const wanted = tab === "all" ? ["published", "draft"] : [tab];
+    const chapters = [];
+    let counts;
+    for (const which of wanted) {
+        const r = await fetchTab(which);
+        if (!r.ok) {
+            if (chapters.length === 0)
+                return { ok: false, message: `读取章节列表失败：${r.error}`, chapters: [], error: r.error };
+            continue;
+        }
+        const d = r.data ?? {};
+        // ⚠️ 字段口径（真机 2026-10 比对得出，平台未公开文档）：
+        //   data_total   → 已发布章节**条数**
+        //   chapter_total→ 章节**条数**（含草稿）
+        //   draft_total  → 草稿**总字数**（不是条数！空草稿时为 0，写了 1507 字后变 1507）
+        counts = {
+            published: Number(d.data_total ?? 0),
+            all: Number(d.chapter_total ?? 0),
+            draftWords: Number(d.draft_total ?? 0),
+        };
+        for (const c of extractList(d))
+            chapters.push(normalizeChapter(c, which === "draft"));
+    }
+    const suffix = counts
+        ? `（平台原始计数 data_total=${counts.published} / chapter_total=${counts.all} / draft_total=${counts.draftWords}` +
+            `；真机比对推测：chapter_total=章节条数、draft_total=草稿总字数、data_total 偏「已过审条数」——` +
+            `别把 data_total 当「已提交条数」，待审核章节不计入它）`
+        : "";
     return {
         ok: true,
-        message: `《${opts.bookId}》共 ${pick(r.data, ["total", "count"]) ?? list.length} 章。`,
-        total: pick(r.data, ["total", "count"]) ?? list.length,
-        chapters: list.map(normalizeChapter),
+        message: `《${opts.bookId}》本次返回 ${chapters.length} 条章节${suffix}。`,
+        total: chapters.length,
+        counts,
+        chapters,
     };
+}
+/**
+ * 读编辑器当前内容（不触发任何输入）。
+ * 真机事实：**章节编辑器 / 短篇正文编辑器都没有 `.el-form-item`**，只能按结构定位；
+ * 短篇编辑器没有「章节序号 / 章节名称」两个 input（那两项会读回空串），只有正文。
+ */
+export async function readEditorState(page) {
+    return (await page.evaluate((sel) => {
+        const g = (s) => document.querySelector(s);
+        const idx = g(sel.index);
+        const title = g(sel.title);
+        const body = g(sel.body);
+        return {
+            章节序号: idx?.value ?? "",
+            章节名称: title?.value ?? "",
+            正文字数: (body?.innerText ?? "").replace(/\s/g, "").length,
+            正文预览: (body?.innerText ?? "").replace(/\s+/g, " ").slice(0, 80),
+        };
+    }, CHAPTER_SELECTORS));
 }
 /**
  * 新增 / 修改章节（同一个编辑器）。
  *
- * 真实路由是 `/front/book-manage/manage?book_id=…`（`chapterEditUrl(bookId, chapterId)`）。
- * ⚠️ 章节编辑器**边输入边自动保存**，所以 `confirm=false` 时**只打开页面读现状 + 截图，绝不填充**
- *    —— 一填充就可能改动线上正文。`confirm=true` 才填入并提交。
+ * 真实路由 `/front/book-upload?id=<bookId>[&cid=<chapterId>]`（真机确认；章节管理页的
+ * 「新建章节」就跳这里）。⚠️ 不带 `cid` 打开会**自动创建一条草稿章节**。
  *
- * 选择器：优先按 label 文本（章节名 / 正文），正文同时兼容富文本 `contenteditable`。
+ * ⚠️ 编辑器**边输入边自动保存**，所以 `confirm=false` 时**只打开页面读现状 + 截图，绝不输入**
+ *    —— 一输入就可能改动线上正文。`confirm=true` 才填入并提交。
  */
 export async function writeChapter(input) {
     assertCookies();
@@ -76,113 +159,177 @@ export async function writeChapter(input) {
     const { browser, page } = session;
     try {
         if (!input.confirm) {
-            await waitForText(page, "章节", 8000).catch(() => false);
+            await sleep(3500);
+            const state = await readEditorState(page);
             const shotPath = await shot(page, "chapter-preview");
-            const form = await readForm(page);
+            const cidPreview = /[?&]cid=(\d+)/.exec(page.url())?.[1];
             await browser.close().catch(() => { });
             return {
                 ok: true,
                 action: "preview",
-                message: `已打开章节页（confirm=false，**未做任何填充**，避免触发自动保存）。` +
-                    `当前表单：${JSON.stringify(form).slice(0, 400)}。核对无误后传 confirm=true。`,
+                chapterId: input.chapterId ?? cidPreview,
+                message: `已打开章节编辑器（confirm=false，**未做任何输入**，避免触发自动保存）。` +
+                    `当前：${JSON.stringify(state)}。核对无误后传 confirm=true。` +
+                    (input.chapterId ? "" : "⚠️ 未传 chapter_id 时，平台打开该页会自动生成一条草稿章节。"),
                 screenshotPath: shotPath,
-                filled: form,
+                filled: state,
             };
         }
         const filled = {};
         const missing = [];
         const plain = input.content ? toPlainText(input.content) : undefined;
-        if (input.title) {
-            const raw = cleanChapterTitle(input.title) || input.title;
-            const r = await fillByLabel(page, "章节名", raw);
-            const r2 = r.ok ? r : await fillByLabel(page, "章节标题", raw);
-            if (r2.ok)
-                filled["章节名"] = raw;
-            else
-                missing.push("title(章节名)");
-        }
+        const mode = input.mode ?? "publish";
+        // 1) 章节序号（默认已有值，显式传了才覆盖）
         if (input.chapterNumber !== undefined) {
-            const r = await fillByLabel(page, "章节序号", String(input.chapterNumber));
-            const r2 = r.ok ? r : await fillByLabel(page, "序号", String(input.chapterNumber));
-            if (r2.ok)
+            if (await fillInput(page, CHAPTER_SELECTORS.index, String(input.chapterNumber))) {
                 filled["章节序号"] = String(input.chapterNumber);
+            }
             else
                 missing.push("chapterNumber(章节序号)");
+            await sleep(300);
         }
+        // 2) 章节名称
+        if (input.title) {
+            const raw = cleanChapterTitle(input.title) || input.title;
+            if (await fillInput(page, CHAPTER_SELECTORS.title, raw))
+                filled["章节名称"] = raw;
+            else
+                missing.push("title(章节名称)");
+            await sleep(300);
+        }
+        // 3) 正文
         if (plain !== undefined) {
-            const ok = await fillChapterBody(page, plain);
-            if (ok)
-                filled["正文"] = `${countCjk(plain)} 字`;
+            const words = countCjk(plain);
+            if (words > CHAPTER_MAX_WORDS)
+                missing.push(`content(正文 ${words} 字，超过平台上限 ${CHAPTER_MAX_WORDS})`);
+            if (await fillInput(page, CHAPTER_SELECTORS.body, plain))
+                filled["正文"] = `${words} 字`;
             else
                 missing.push("content(正文)");
+            await sleep(500);
         }
-        if (input.scheduledTime) {
-            const r = await fillByLabel(page, "定时", input.scheduledTime);
-            if (r.ok)
-                filled["定时发布"] = input.scheduledTime;
-            else
-                missing.push("scheduledTime(定时发布)");
+        // 4) 发布前拦一道：立即发布要够字数，否则前端会拦下（省一次往返）
+        if (mode === "publish" && plain !== undefined && countCjk(plain) < CHAPTER_MIN_WORDS) {
+            const shotPath = await shot(page, "chapter-too-short");
+            await browser.close().catch(() => { });
+            return {
+                ok: false,
+                action: "error",
+                message: `正文 ${countCjk(plain)} 字，未达「立即发布」下限 ${CHAPTER_MIN_WORDS} 字，未提交（平台会拦）。可改用 mode=draft 存草稿，或补足正文字数。`,
+                screenshotPath: shotPath,
+                filled,
+                missing,
+            };
         }
-        const submitted = (await realClickText(page, "发布", { exact: true })) ||
-            (await realClickText(page, "提交", { exact: true })) ||
-            (await realClickText(page, "保存", { exact: true })) ||
-            (await realClickText(page, "确定", { exact: true }));
-        const modal = await visibleModalText(page);
-        const shotPath = await shot(page, "chapter-done");
+        // 5) 提交
+        // ⚠️ 按钮文案在**新章**与**已有草稿**上不一样（真机确认）：
+        //    新章 = 「存为草稿」/「定时发布」/「立即发布」；
+        //    已有草稿 = 「更新草稿」/「定时发布」/「立即发布」。
+        const btnCandidates = mode === "draft" ? ["存为草稿", "更新草稿", "保存草稿"] : mode === "schedule" ? ["定时发布"] : ["立即发布"];
+        const action = mode === "draft" ? "drafted" : mode === "schedule" ? "scheduled" : "published";
+        if (mode === "schedule" && !input.scheduledTime) {
+            await browser.close().catch(() => { });
+            return { ok: false, action: "error", message: `mode=schedule 需要同时给 scheduledTime（yyyy-MM-dd HH:mm）。`, filled, missing };
+        }
+        // 抓章节写接口的响应作为**权威**成功判据（编辑器回读只能证明草稿被自动保存，
+        // 证明不了「发布成功」——真机踩过：只点「立即发布」不点二次确认，章节仍是草稿）。
+        const apiTrace = [];
+        let apiOk = false;
+        let publishDone = false;
+        const onResp = async (resp) => {
+            try {
+                const u = String(resp.url());
+                if (!/chapter/i.test(u) || !/(publish|save|draft|add|update|modify)/i.test(u))
+                    return;
+                const body = await resp.text();
+                const short = u.replace(authorBase(), "");
+                apiTrace.push(`${short} => ${body.slice(0, 240)}`);
+                if (!/error|"code":"4|失败/.test(body))
+                    apiOk = true;
+                // `draft-publish`（正式发布，区别于 `draft-publish-confirm`）成功 = 发布已落地
+                if (/draft-publish(?!-confirm)/.test(u) && !/error|"code":"4|失败/.test(body))
+                    publishDone = true;
+            }
+            catch {
+                /* 忽略 */
+            }
+        };
+        page.on("response", onResp);
+        let clicked;
+        for (const t of btnCandidates) {
+            if (await realClickText(page, t, { exact: true })) {
+                clicked = t;
+                break;
+            }
+        }
+        if (!clicked) {
+            page.off?.("response", onResp);
+            const shotPath = await shot(page, "chapter-nobutton");
+            await browser.close().catch(() => { });
+            return {
+                ok: false,
+                action: "error",
+                message: `已填入但未找到提交按钮（候选：${btnCandidates.join("/")}）。已填：${Object.keys(filled).join("/")}；缺：${missing.join("/") || "无"}。`,
+                screenshotPath: shotPath,
+                filled,
+                missing,
+            };
+        }
+        await sleep(2000);
+        // ★ 二次确认弹窗（真机确认是**两层**）：点「立即发布」→ 弹窗①「请核对上下文内容」+确认发布
+        //   → 点确认发布 → 弹层②「重要提醒」+『我已阅读并知晓』→ 再点确认发布 → 才真正发布。
+        //   只做一层会「点了但章节还是草稿」——这是本工具最初踩的坑。
+        let confirmed = [];
+        if (mode === "publish" || mode === "schedule") {
+            confirmed = await acceptPublishConfirm(page, 4, () => publishDone);
+        }
+        if (mode === "schedule" && input.scheduledTime) {
+            // 定时发布的时间选择器结构未联调：尽力而为，失败就如实回报（让用户手动确认时间）
+            missing.push(`scheduledTime(${confirmed.length ? `已点${confirmed.map((x) => `「${x}」`).join("→")}` : "未找到定时弹层"}；时间 ${input.scheduledTime} 需在页面手动核对)`);
+        }
+        await waitForText(page, "成功", 5000).catch(() => false);
+        const toast = await visibleToastText(page);
+        const shotPath = await shot(page, `chapter-${action}`);
+        const state = await readEditorState(page);
+        const urlNow = page.url();
+        const cidFromUrl = /[?&]cid=(\d+)/.exec(urlNow)?.[1];
+        page.off?.("response", onResp);
         await browser.close().catch(() => { });
+        // 成功判据优先级：写接口响应 > toast > （兜底）编辑器回读
+        const okSignal = apiOk || /成功|已保存|已提交|已发布/.test(toast);
+        const notes = [];
+        if (!input.chapterId && cidFromUrl)
+            notes.push(`平台已自动建草稿 chapterId=${cidFromUrl}（不传 chapter_id 打开编辑器就会这样）`);
+        if (confirmed.length)
+            notes.push(`已点确认链：${confirmed.map((x) => `「${x}」`).join("→")}`);
+        else if (mode === "publish")
+            notes.push("⚠️ 未出现二次确认弹窗（可能按钮未生效）");
+        if (missing.length)
+            notes.push(`未命中/警告：${missing.join("/")}`);
+        if (toast)
+            notes.push(`提示：${toast}`);
+        if (apiTrace.length)
+            notes.push(`写接口：${apiTrace.slice(-2).join(" ｜ ")}`);
+        else if (!okSignal)
+            notes.push("未捕获章节写接口响应，请到章节管理页复核");
+        if (mode === "publish" && !apiOk)
+            notes.push("⚠️ 未确认发布成功（章节可能仍是草稿）");
         return {
-            ok: submitted,
-            action: submitted ? (input.scheduledTime ? "scheduled" : "published") : "error",
-            message: submitted
-                ? `已提交章节《${input.title ?? ""}》。${missing.length ? `未命中字段：${missing.join("/")}。` : ""}${modal ? `页面提示：${modal.slice(0, 200)}` : ""}`
-                : `已填表但未找到提交按钮。缺：${missing.join("/") || "无"}。`,
+            ok: okSignal,
+            action: okSignal ? action : "error",
+            message: `已点「${clicked}」（bookId=${input.bookId}${input.chapterId ? `, chapterId=${input.chapterId}` : ""}）。` +
+                `${notes.length ? notes.join("；") + "。" : ""}` +
+                ` 编辑器现状：${JSON.stringify(state)}。`,
             screenshotPath: shotPath,
-            chapterId: input.chapterId,
+            chapterId: input.chapterId ?? cidFromUrl,
             filled,
             missing,
         };
     }
     catch (e) {
         await browser.close().catch(() => { });
-        return { ok: false, action: "error", message: `章节写入异常：${e.message}` };
+        return { ok: false, action: "error", message: `写章节异常：${e.message}` };
     }
-}
-/** 往编辑器正文区写入：富文本 contenteditable 优先，退回 textarea */
-async function fillChapterBody(page, text) {
-    const isRich = await page.evaluate(() => {
-        const ed = document.querySelector(".ProseMirror, [contenteditable='true']");
-        if (ed) {
-            ed.setAttribute("data-qimao-body", "1");
-            return true;
-        }
-        return false;
-    });
-    if (isRich) {
-        try {
-            const handle = await page.$("[data-qimao-body='1']");
-            await handle.evaluate((el) => {
-                el.scrollIntoView({ block: "center" });
-                el.focus();
-            });
-            await handle.evaluate((el, t) => {
-                el.innerText = t;
-            }, text);
-            await handle.evaluate((el) => {
-                el.removeAttribute("data-qimao-body");
-                el.dispatchEvent(new Event("input", { bubbles: true }));
-                el.dispatchEvent(new Event("change", { bubbles: true }));
-            });
-            return true;
-        }
-        catch (e) {
-            logger.debug(`正文富文本写入失败: ${e.message}`);
-        }
-    }
-    const r = await fillByLabel(page, "正文", text);
-    if (r.ok)
-        return true;
-    const r2 = await fillByLabel(page, "章节内容", text);
-    return r2.ok;
 }
 /** 批量上传 / 改章用的单章原语（新增或修改章节） */
 export async function uploadChapter(input) {
@@ -192,15 +339,21 @@ export async function uploadChapter(input) {
         chapterNumber: input.chapterNumber,
         title: input.title,
         content: input.content,
+        mode: input.mode,
         scheduledTime: input.scheduledTime,
         confirm: input.confirm,
         headless: input.headless,
     });
 }
-/** 删除章节（默认预览） */
+/**
+ * 删除章节（默认预览）。
+ *
+ * ⚠️ 必须从**章节管理列表页**（`chapterManageUrl`）删，不能打开章节编辑器删——
+ * 打开 `/front/book-upload?id=…`（不带 cid）平台会**自动新建一条草稿**，等于没删还多一条。
+ * 真实删除交互（hover 出的删除图标 → 二次确认）尚未真机联调。 */
 export async function deleteChapter(input) {
     assertCookies();
-    const session = await openSession(input.headless ?? true, chapterEditUrl(input.bookId));
+    const session = await openSession(input.headless ?? true, chapterManageUrl(input.bookId));
     if (isError(session))
         return { ok: false, action: "error", message: session.error };
     const { browser, page } = session;
@@ -219,9 +372,15 @@ export async function deleteChapter(input) {
         await realClickText(page, "删除", { exact: true });
         await sleep(500);
         await realClickText(page, "确定", { exact: true });
+        const modal = await visibleModalText(page);
         const shotPath = await shot(page, "chapter-delete-done");
         await browser.close().catch(() => { });
-        return { ok: true, action: "published", message: `已提交删除 chapterId=${input.chapterId}。`, screenshotPath: shotPath };
+        return {
+            ok: true,
+            action: "deleted",
+            message: `已提交删除 chapterId=${input.chapterId}。${modal ? `页面提示：${modal.slice(0, 200)}` : "（未读到明确提示，请到章节管理页复核）"}`,
+            screenshotPath: shotPath,
+        };
     }
     catch (e) {
         await browser.close().catch(() => { });

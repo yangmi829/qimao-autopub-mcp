@@ -72,6 +72,102 @@ export async function realClickText(page, text, opts = {}) {
         return false;
     }
 }
+/**
+ * 用一段 JS 表达式在页面里「算出要点的坐标」，再用真实鼠标点。
+ *
+ * 为什么需要它：七猫的建书/标签弹窗里很多可点元素是 `div` / `a.qm-btn` /
+ * 自定义组件卡片，既没有稳定选择器，`realClickText` 的「按文本找最内层」也容易
+ * 点到页脚同名链接（踩过：点「七猫中文网」命中了页脚短链）。这里允许调用方
+ * 自己把作用域限定到可见弹窗 / 第 N 个卡片，再交回真实鼠标。
+ *
+ * `expr` 必须返回 `{x, y}` 或 `null`。
+ */
+export async function realClickByJs(page, expr) {
+    try {
+        const pt = (await page.evaluate(expr));
+        if (!pt)
+            return false;
+        await page.mouse.click(pt.x, pt.y);
+        return true;
+    }
+    catch (e) {
+        logger.debug(`realClickByJs 失败: ${e.message}`);
+        return false;
+    }
+}
+/**
+ * 用真实键鼠往「按 JS 定位到的元素」里输入。
+ *
+ * ⚠️ 必须真实输入：七猫建书页（Vue 2 + 类 Element-UI）只认原生键鼠事件。
+ * 直接 `el.value = "x"` + `dispatchEvent(new Event("input"))` **不会**更新 v-model
+ * ——真机上表现为「看着填进去了，但提交按钮一直是灰的 / 提交后字段为空」。
+ */
+export async function realTypeByJs(page, expr, value, delay = 30, clear = true) {
+    try {
+        const pt = (await page.evaluate(expr));
+        if (!pt)
+            return false;
+        await page.mouse.click(pt.x, pt.y);
+        await sleep(220);
+        if (clear) {
+            // Ctrl+A 只作用于当前聚焦的输入域（input / textarea / contenteditable），不会全选整页
+            await page.keyboard.down("Control");
+            await page.keyboard.press("KeyA");
+            await page.keyboard.up("Control");
+            await page.keyboard.press("Backspace");
+            await sleep(140);
+        }
+        await page.keyboard.type(value, { delay });
+        return true;
+    }
+    catch (e) {
+        logger.debug(`realTypeByJs 失败: ${e.message}`);
+        return false;
+    }
+}
+/** 在「当前可见的」下拉浮层里按可见文本点一项（Element-UI 的 `.el-select-dropdown__item`） */
+export async function clickVisibleOption(page, optionText) {
+    const pt = (await page.evaluate((want) => {
+        const vis = (el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const dds = Array.from(document.querySelectorAll(".el-select-dropdown")).filter(vis);
+        for (const dd of dds) {
+            const items = Array.from(dd.querySelectorAll(".el-select-dropdown__item"));
+            const hit = items.find((o) => (o.innerText ?? o.textContent ?? "").trim() === want);
+            if (hit) {
+                hit.scrollIntoView({ block: "center" });
+                const r = hit.getBoundingClientRect();
+                return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }
+        }
+        return null;
+    }, optionText));
+    if (!pt)
+        return false;
+    await page.mouse.click(pt.x, pt.y);
+    return true;
+}
+/** 读取当前可见下拉浮层里的全部选项文本 */
+export async function visibleSelectOptions(page) {
+    return (await page.evaluate(() => {
+        const vis = (el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const dds = Array.from(document.querySelectorAll(".el-select-dropdown")).filter(vis);
+        const out = [];
+        for (const dd of dds) {
+            for (const o of Array.from(dd.querySelectorAll(".el-select-dropdown__item"))) {
+                const t = (o.innerText ?? o.textContent ?? "").trim();
+                if (t)
+                    out.push(t);
+            }
+        }
+        return out;
+    }));
+}
 /** 清空并输入文本（先聚焦、全选、删除，避免与默认值拼接） */
 export async function fillInput(page, selector, value) {
     const handle = await page.$(selector);
@@ -91,6 +187,164 @@ export async function fillInput(page, selector, value) {
         logger.debug(`fillInput(${selector}) 失败: ${e.message}`);
         return false;
     }
+}
+/**
+ * 读取「轻提示」文本（Element-UI 的 toast / 通知 / 确认框），用于判定成功。
+ *
+ * 为什么不直接用 `visibleModalText`：七猫页面常驻一个**法律声明弹窗**
+ * （「重要提醒 …… 我已阅读并同意」），`visibleModalText` 会把这段长文案当成页面提示，
+ * 结果「页面提示」全是免责声明，真正的 `保存成功` toast 反而被淹没。
+ */
+export async function visibleToastText(page) {
+    return (await page.evaluate(() => {
+        const sel = ".el-message, .el-message__content, .el-notification, .el-message-box, .el-message-box__message, .qm-message, .g-toast";
+        const out = [];
+        for (const el of Array.from(document.querySelectorAll(sel))) {
+            const r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0)
+                continue;
+            const t = (el.innerText ?? el.textContent ?? "").trim();
+            if (t)
+                out.push(t);
+        }
+        return out.join(" | ").slice(0, 500);
+    }));
+}
+/**
+ * 若页面弹出「我已阅读并同意」类协议勾选框且未勾选，则真实点击勾上。
+ *
+ * 真机背景：七猫在发布/提交前会弹法律声明弹窗（「……我已阅读并同意」），
+ * 不勾选时「立即发布」会被拦下。勾选是用户明确的发布意图，故默认执行。
+ * 返回是否点了（未发现弹窗 / 已勾选都返回 false）。
+ */
+export async function acceptAgreementIfPresent(page) {
+    const pt = (await page.evaluate(() => {
+        const vis = (e) => {
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        // 只认「可见弹窗 / 遮罩层里」的勾选框，避免点到正文里的同名文字
+        const scopes = Array.from(document.querySelectorAll(".el-dialog, .el-message-box, .g-pop, .qm-dialog")).filter(vis);
+        for (const scope of scopes) {
+            const txt = (scope.innerText ?? "") || "";
+            if (!/我已/.test(txt) || !/(同意|阅读|遵守)/.test(txt))
+                continue;
+            for (const cb of Array.from(scope.querySelectorAll(".el-checkbox, input[type=checkbox]"))) {
+                const host = cb.classList?.contains("el-checkbox") ? cb : cb.closest?.(".el-checkbox") ?? cb;
+                if (host.classList?.contains("is-checked") || cb.checked)
+                    continue;
+                host.scrollIntoView({ block: "center" });
+                const r = host.getBoundingClientRect();
+                return { x: r.x + 12, y: r.y + r.height / 2 };
+            }
+        }
+        return null;
+    }));
+    if (!pt)
+        return false;
+    await page.mouse.click(pt.x, pt.y);
+    await sleep(400);
+    return true;
+}
+/**
+ * 轮询「可见弹窗」里的按钮并真实点击，返回被点中的按钮文案（超时返回 undefined）。
+ *
+ * ⚠️ 为什么必须轮询：弹窗是**异步渲染**的（先发一个 confirm 接口，拿到响应才挂载 DOM）。
+ * 点完主按钮立刻查一次必然落空——真机踩过：`立即发布` 后的二次确认弹窗没被点，
+ * 章节停在草稿，工具却报成功。别改回「sleep 一次 + 查一次」。
+ */
+export async function clickInVisibleDialog(page, texts, timeoutMs = 12000) {
+    const expr = (t) => `(()=>{const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;};` +
+        `const ds=Array.from(document.querySelectorAll(".el-dialog,.el-message-box,.g-pop,.qm-dialog")).filter(vis);` +
+        `for(let i=ds.length-1;i>=0;i--){const b=Array.from(ds[i].querySelectorAll("a.qm-btn,button")).find(x=>((x.innerText||"").trim())===${JSON.stringify(t)});if(b&&!/disabled/.test((b.className||"").toString())){b.scrollIntoView({block:"center"});const r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};}}return null;})()`;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        for (const t of texts) {
+            let pt = null;
+            try {
+                pt = (await page.evaluate(expr(t)));
+            }
+            catch {
+                pt = null;
+            }
+            if (pt) {
+                await page.mouse.click(pt.x, pt.y);
+                return t;
+            }
+        }
+        await sleep(500);
+    }
+    return undefined;
+}
+/**
+ * 点掉「确认发布确认」类**多层**弹窗（真机流程，别简化）：
+ *
+ *   点「立即发布」→ 弹窗①（请核对上下文内容 + 内容声明 + `确认发布`）
+ *                → 点①的「确认发布」→ 弹层②（重要提醒 + `我已阅读并知晓`）
+ *                → 点②的「我已阅读并知晓」→ 再点①的「确认发布」→ 才真正发布
+ *
+ * ⚠️ 「我已阅读并知晓」是 `<em>`（不是 button），且弹层挂在 body 上（不在 .el-dialog 里），
+ *    所以必须**全页**按短文本找。只做一层确认的实现在真机上表现为「点了但章节还是草稿」。
+ *
+ * 返回每轮实际点中的按钮文案（按顺序）。
+ */
+export async function acceptPublishConfirm(page, rounds = 4, shouldStop) {
+    const done = [];
+    for (let i = 0; i < rounds; i++) {
+        if (shouldStop?.())
+            break; // 发布接口已成功——别再多点（避免重复提交）
+        const agreed = await clickAgreementIfPresent(page, i === 0 ? 1500 : 2500);
+        const hit = await clickInVisibleDialog(page, ["确认发布", "确定"], i === 0 ? 12000 : 2500);
+        if (!hit && !agreed)
+            break; // 没有弹窗了，收工
+        if (hit)
+            done.push(hit);
+        await sleep(2500);
+    }
+    return done;
+}
+/**
+ * 全页找「我已阅读并…」(如「我已阅读并知晓」「我已阅读并同意」)的**短文本**可点元素并真实点击。
+ * 这类元素是 `<em>` / `<span>`，不是 `button`，且常挂在 body 上的浮层里 → 不能只在 .el-dialog 里找。
+ * 用「文本长度 ≤ 30」把正文 / 长条款段落排除掉。
+ */
+export async function clickAgreementIfPresent(page, timeoutMs = 3000) {
+    // ⚠️ 真机坑：该元素带**倒计时**——文本是「我已阅读并知晓(3)」→「(2)」→「我已阅读并知晓」，
+    //    倒计时期间点击无效（等同 disabled）。所以必须**等倒计时走完**（文本不再带 `(数字)`）再点。
+    const expr = `(()=>{const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;};` +
+        `const all=Array.from(document.querySelectorAll("em,span,a,label,i,div"));let best=null;` +
+        `for(const el of all){const t=(el.textContent||"").trim();` +
+        `if(t.length<4||t.length>30)continue;` +
+        `if(!/我已阅读并/.test(t))continue;` +
+        `if(!/同意|知晓|接受/.test(t))continue;` +
+        `if(/\\(\\s*\\d+\\s*\\)\\s*$/.test(t))continue;` +
+        `if(!vis(el))continue;` +
+        `if(Array.from(el.children).some(c=>((c.textContent||"").trim())===t))continue;` +
+        `best=el;}` +
+        `if(!best)return null;best.scrollIntoView({block:"center"});const r=best.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2,txt:(best.textContent||"").trim()};})()`;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        let pt = null;
+        try {
+            pt = (await page.evaluate(expr));
+        }
+        catch {
+            pt = null;
+        }
+        if (pt) {
+            await page.mouse.click(pt.x, pt.y);
+            await sleep(300);
+            // 点完还要确认它真的消失了（否则可能是倒计时中/未生效）
+            const gone = (await page.evaluate(`(()=>{const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;};` +
+                `return !Array.from(document.querySelectorAll("em,span,a,label,i")).some(el=>{const t=(el.textContent||"").trim();` +
+                `return t.length<30&&/我已阅读并(同意|知晓|接受)/.test(t)&&!/\\(\\s*\\d+\\s*\\)\\s*$/.test(t)&&vis(el);});})()`));
+            if (gone)
+                return pt.txt;
+            await sleep(800);
+        }
+        await sleep(400);
+    }
+    return undefined;
 }
 /** 读取元素文本（不存在返回空串） */
 export async function textOf(page, selector) {

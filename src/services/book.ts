@@ -1,20 +1,40 @@
 import { logger } from "../core/logger.js";
-import { shot } from "../browser/driver.js";
+import { sleep, shot } from "../browser/driver.js";
 import { API, apiGet, openSession, isError, bookManageUrl, createBookUrl, bookInfoUrl, authorBase } from "../browser/endpoints.js";
 import { fillByLabel, readForm, clickInFormItem } from "../browser/form.js";
-import { realClickText, waitForText, visibleModalText } from "../browser/page.js";
+import {
+  realClickText,
+  realClickByJs,
+  realTypeByJs,
+  clickVisibleOption,
+  visibleSelectOptions,
+  waitForText,
+  visibleModalText,
+} from "../browser/page.js";
 import { assertCookies } from "./auth.js";
+import { cleanBookTitle } from "../core/text.js";
 
 export type BookKind = "long" | "short";
 
 export interface BookSummary {
   bookId: string;
   bookName: string;
-  /** 连载中 / 已完结 / 草稿 等（平台原文） */
+  /** 连载中 / 已完结 等（平台原文，或按 is_over 推导） */
   status?: string;
   category?: string;
   words?: number;
   chapterCount?: number;
+  /** 首发站点 client_id：1=七猫中文网，3=纵横中文网 */
+  clientId?: string;
+  /** 频道：0=男频，1=女频（站点字段 is_girl） */
+  isGirl?: string;
+  /** 是否完结：0=连载中，1=已完结 */
+  isOver?: string;
+  /** 签约状态：0=未签约，1=已签约 */
+  signStatus?: string;
+  /** 距可签约还差多少字 */
+  wordsToSign?: string;
+  coverUrl?: string;
   /** 原始条目，字段名不确定时排障用 */
   raw?: unknown;
 }
@@ -29,15 +49,25 @@ function pick<T = unknown>(obj: any, keys: string[]): T | undefined {
   return undefined;
 }
 
-/** 把后台作品条目归一化成稳定结构（字段名以联调结果为准，这里做多命名兼容） */
+/** 把后台作品条目归一化成稳定结构（字段名以 2026-10 真机联调结果为准） */
 export function normalizeBook(b: any): BookSummary {
+  const isOver = pick<string>(b, ["is_over"]);
+  const signStatus = pick<string>(b, ["sign_status"]);
+  const rawStatus = pick<string>(b, ["status_name", "statusName", "status", "book_status_name"]);
   return {
     bookId: String(pick(b, ["book_id", "bookId", "id", "bid"]) ?? ""),
-    bookName: String(pick(b, ["book_name", "bookName", "name", "title"]) ?? ""),
-    status: pick<string>(b, ["status_name", "statusName", "status", "book_status_name"]),
+    bookName: String(pick(b, ["title", "book_name", "bookName", "name"]) ?? ""),
+    status: rawStatus ?? (isOver === "1" ? "已完结" : isOver === "0" ? "连载中" : undefined),
     category: pick<string>(b, ["category_name", "categoryName", "category", "channel_name"]),
-    words: pick<number>(b, ["word_count", "wordCount", "words", "total_words", "word_num"]),
+    words: pick<number>(b, ["total_words", "word_count", "wordCount", "words", "word_num"]),
     chapterCount: pick<number>(b, ["chapter_num", "chapterNum", "chapter_count", "chapterCount"]),
+    // 真机确认存在的字段（便于排障核对，不要依赖 `raw` 之外的猜测字段名）
+    clientId: pick<string>(b, ["client_id"]),
+    isGirl: pick<string>(b, ["is_girl"]),
+    isOver: isOver ? String(isOver) : undefined,
+    signStatus: signStatus ? String(signStatus) : undefined,
+    wordsToSign: pick<string>(b, ["words_disparity", "sign_condition"]),
+    coverUrl: pick<string>(b, ["image_link"]),
     raw: b,
   };
 }
@@ -89,13 +119,19 @@ export async function listBooks(opts: { kind?: BookKind; nextId?: string } = {})
 
 export interface CreateBookInput {
   bookName: string;
-  /** 1=男频 0=女频（以平台实际字段为准） */
+  /** 1=男频 0=女频（工具口径；落到页面是「目标读者」单选：1→男生，0→女生） */
   gender?: number;
   abstract?: string;
   protagonist1?: string;
   protagonist2?: string;
+  /** 一级分类名称（缺省或未匹配时取第一个，配合 `list_book_options_qimao`） */
   category?: string;
+  /** 二级分类名称（缺省或未匹配时取该一级的第一个） */
+  categorySub?: string;
+  /** 标签名称，按分组顺序取用；缺省时每个分组各取第一个 */
   tags?: string[];
+  /** 首发站点 client_id：1=七猫中文网（默认），3=纵横中文网 */
+  clientId?: string;
   confirm?: boolean;
   headless?: boolean;
 }
@@ -119,24 +155,214 @@ async function fillFirst(page: any, candidates: string[], value: string): Promis
   return { ok: false };
 }
 
+/* --------------------- 建书：真机（2026-10）流程与选择器 --------------------- */
+
+/**
+ * 建书的**真实**流程（真机联调确认，全部为「像人一样」的真实键鼠操作）：
+ *
+ * 1. 打开作品管理列表页 `/front/book-manage`（建书**没有独立路由**）；
+ * 2. 点「新建小说」→ 弹出「选择首发站点」（选项来自 `book/client-list`，
+ *    顺序是 纵横(3) / 七猫(1)；`POST book/client-choose` 记录选择）；
+ * 3. 点站点卡片 → 点弹窗「确认」→ 跳到 `/front/book-manage/information?client_id=<id>`；
+ * 4. 填表 → 点「确认创建」→ `POST book/save-book-info` 返回 `data.book_id`。
+ *
+ * ⚠️ 前端 `submitBtnDisabled` 的**全部门禁**（真机读出的源码，缺一不可）：
+ *    `书名 && 目标读者 && 一级分类 && 二级分类 && 作品简介 && 至少1个标签 && 至少1个主角名`
+ *    （另有：若该站点显示「有奖征文」则必须选；书名/主角名不得命中前端校验）。
+ *    所以本函数对「简介 / 主角 / 标签」都会兜底填默认值，否则按钮永远灰着。
+ */
+export function jsFormItemControl(label: string, selector: string, nth = 0): string {
+  return `(()=>{const it=Array.from(document.querySelectorAll(".el-form-item")).find(x=>((x.querySelector(".el-form-item__label")?.innerText||"").trim()).includes(${JSON.stringify(
+    label
+  )}));const list=Array.from(it?.querySelectorAll(${JSON.stringify(
+    selector
+  )})||[]);const el=list[${nth}];if(!el)return null;el.scrollIntoView({block:"center"});const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`;
+}
+
+export function jsFormItemRadio(label: string, index: number): string {
+  return `(()=>{const it=Array.from(document.querySelectorAll(".el-form-item")).find(x=>((x.querySelector(".el-form-item__label")?.innerText||"").trim()).includes(${JSON.stringify(
+    label
+  )}));const rs=Array.from(it?.querySelectorAll(".el-radio")||[]);const el=rs[${index}];if(!el)return null;el.scrollIntoView({block:"center"});const r=el.getBoundingClientRect();return{x:r.x+14,y:r.y+r.height/2};})()`;
+}
+
+/** 站点选择弹窗里的第 N 个站点卡片（按 `.client-name` 文本精确匹配） */
+export function jsSiteCard(name: string): string {
+  return `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const d=Array.from(document.querySelectorAll(".el-dialog")).filter(vis).pop();const boxes=Array.from(d?.querySelectorAll(".client-box")||[]);const b=boxes.find(x=>((x.querySelector(".client-name")?.innerText||"").trim())===${JSON.stringify(
+    name
+  )});if(!b)return null;b.scrollIntoView({block:"center"});const r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+30};})()`;
+}
+
+/** 可见弹窗里的按钮（`a.qm-btn` 不是 `<button>`！真机踩过） */
+export function jsDialogBtn(text: string): string {
+  return `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const d=Array.from(document.querySelectorAll(".el-dialog")).filter(vis).pop();if(!d)return null;const b=Array.from(d.querySelectorAll("a.qm-btn,button")).find(x=>((x.innerText||"").trim())===${JSON.stringify(
+    text
+  )});if(!b)return null;b.scrollIntoView({block:"center"});const r=b.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`;
+}
+
+/** 标签弹窗里第 `groupIndex` 个分组内、文本为 `name`（不给则第一个）的标签 */
+function jsTagInGroup(groupIndex: number, name?: string): string {
+  return `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const d=Array.from(document.querySelectorAll(".el-dialog")).filter(vis).pop();const box=Array.from(d?.querySelectorAll(".tags-box")||[]).filter(vis)[${groupIndex}];if(!box)return null;const items=Array.from(box.querySelectorAll(".tags-con")).filter(vis);const want=${name ? JSON.stringify(name) : "null"};const el=(want&&items.find(x=>((x.innerText||"").trim())===want))||items[0];if(!el)return null;el.scrollIntoView({block:"center"});const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`;
+}
+
+/** 作品名称 / 作品简介 / 主角名的定位表达式（建书页与作品信息页是同一套结构） */
+const EXPR_TITLE = `(()=>{const el=document.querySelector(".qm-highlight-textarea");if(!el)return null;el.scrollIntoView({block:"center"});const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`;
+const EXPR_DESC = `(()=>{const el=document.querySelector(".q-contenteditable");if(!el)return null;el.scrollIntoView({block:"center"});const r=el.getBoundingClientRect();return{x:r.x+40,y:r.y+18};})()`;
+
+/**
+ * 填写作品信息字段（建书页 / 作品信息页共用；两页是同一套 DOM 结构）。
+ *
+ * 只填**显式传入**的字段；未传的保持原样（建书时由调用方补默认值）。
+ * ⚠️ 必须真实键鼠（Vue 2 + 类 Element-UI 不认 JS 赋 value），且必须「先清空再输入」。
+ */
+export async function fillBookInfoFields(
+  page: any,
+  opts: { bookName?: string; abstract?: string; protagonist1?: string; protagonist2?: string; category?: string; categorySub?: string; tags?: string[] },
+  filled: Record<string, string>,
+  missing: string[],
+  labelSuffix = ""
+): Promise<void> {
+  // 作品名称
+  if (opts.bookName !== undefined && opts.bookName !== "") {
+    if (await realTypeByJs(page, EXPR_TITLE, opts.bookName, 40)) filled[`作品名称${labelSuffix}`] = opts.bookName;
+    else missing.push("bookName(作品名称)");
+    await sleep(400);
+  }
+
+  // 作品类型：一级 + 二级（下拉浮层是异步渲染的，点完要等）
+  if (opts.category !== undefined || opts.categorySub !== undefined) {
+    const pickedL1 = await realClickByJs(page, jsFormItemControl("作品类型", ".el-select", 0));
+    if (!pickedL1) {
+      missing.push("category(作品类型-一级)");
+    } else {
+      await sleep(1100);
+      const l1 = opts.category ?? "";
+      if (!(l1 && (await clickVisibleOption(page, l1)))) {
+        await realClickByJs(page, `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const dd=Array.from(document.querySelectorAll(".el-select-dropdown")).filter(vis)[0];const it=dd?.querySelector(".el-select-dropdown__item");if(!it)return null;const r=it.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+        if (l1) missing.push(`category(一级分类「${l1}」未匹配，已取第一项)`);
+      }
+      await sleep(1500);
+      const l1Text = await page.evaluate(() => {
+        const it = (Array.from(document.querySelectorAll(".el-form-item")) as any[]).find((x: any) => (x.querySelector(".el-form-item__label")?.innerText || "").trim().includes("作品类型"));
+        return (it?.querySelectorAll("input.el-input__inner")?.[0] as any)?.value ?? "";
+      });
+      if (l1Text) filled["作品类型-一级"] = String(l1Text);
+
+      if (await realClickByJs(page, jsFormItemControl("作品类型", ".el-select", 1))) {
+        await sleep(1100);
+        const sub = opts.categorySub ?? "";
+        if (!(sub && (await clickVisibleOption(page, sub)))) {
+          await realClickByJs(page, `(()=>{const vis=e=>e.getBoundingClientRect().width>0;const dd=Array.from(document.querySelectorAll(".el-select-dropdown")).filter(vis).pop();const it=dd?.querySelector(".el-select-dropdown__item");if(!it)return null;const r=it.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+          if (sub) missing.push(`categorySub(二级分类「${sub}」未匹配，已取第一项)`);
+        }
+        await sleep(1200);
+        const l2Text = await page.evaluate(() => {
+          const it = (Array.from(document.querySelectorAll(".el-form-item")) as any[]).find((x: any) => (x.querySelector(".el-form-item__label")?.innerText || "").trim().includes("作品类型"));
+          return (it?.querySelectorAll("input.el-input__inner")?.[1] as any)?.value ?? "";
+        });
+        if (l2Text) filled["作品类型-二级"] = String(l2Text);
+      } else missing.push("categorySub(作品类型-二级)");
+    }
+  }
+
+  // 作品简介（contenteditable）
+  if (opts.abstract !== undefined && opts.abstract !== "") {
+    if (await realTypeByJs(page, EXPR_DESC, opts.abstract, 20)) filled[`作品简介${labelSuffix}`] = opts.abstract;
+    else missing.push("abstract(作品简介)");
+    await sleep(400);
+  }
+
+  // 主角名
+  const heroes = [opts.protagonist1, opts.protagonist2].filter((x): x is string => !!(x && x.trim()));
+  for (let i = 0; i < heroes.length; i++) {
+    const key = `主角名${i + 1}`;
+    if (await realTypeByJs(page, jsFormItemControl("主角名", "textarea", i), heroes[i].trim(), 50)) filled[key] = heroes[i].trim();
+    else missing.push(`${key.toLowerCase()}(主角名${i + 1})`);
+    await sleep(400);
+  }
+
+  // 作品标签：每个分组至少 1 个（不指定就各取第一个）
+  if (opts.tags && opts.tags.length > 0) {
+    if (await realClickByJs(page, jsFormItemControl("作品标签", "p.p-book-selected-tags", 0))) {
+      await sleep(2200);
+      const groups = (await page.evaluate(() => {
+        const vis = (e: any) => e.getBoundingClientRect().width > 0;
+        const d = (Array.from(document.querySelectorAll(".el-dialog")) as any[]).filter(vis).pop();
+        return d ? Array.from(d.querySelectorAll(".tags-box")).filter(vis).length : 0;
+      })) as number;
+      if (groups > 0) {
+        let picked = 0;
+        for (let gi = 0; gi < groups; gi++) {
+          const hit = opts.tags[gi];
+          if (await realClickByJs(page, jsTagInGroup(gi, hit))) {
+            picked++;
+            if (hit) filled[`标签-组${gi + 1}`] = hit;
+          }
+          await sleep(500);
+        }
+        filled["标签数"] = `${picked}/${groups}`;
+        if (!(await realClickByJs(page, jsDialogBtn("确定")))) await realClickText(page, "确定", { exact: true });
+        await sleep(1600);
+      } else missing.push("tags(标签弹窗没打开)");
+    } else missing.push("tags(作品标签入口)");
+  }
+}
+
+/**
+ * 读作品信息表单的 Vue 状态（前端内部结构，仅供排障 / 判门禁用，取不到就返回 null）。
+ * 真机确认：**建书页 / 作品信息页 / 短篇信息页**是同一个组件（`form.el-form` 的 `$parent`），
+ * 所以这一份能同时给长篇建书、改信息、短篇建篇判门禁。
+ */
+export async function readCreateFormState(page: any): Promise<any | null> {
+  try {
+    return await page.evaluate(() => {
+      const vm = (document.querySelector("form.el-form") as any)?.__vue__?.$parent;
+      if (!vm) return null;
+      return {
+        title: vm.titleHighlightData?.content ?? "",
+        is_girl: vm.formData?.is_girl ?? "",
+        category_1: vm.formData?.category_1 ?? "",
+        category_2: vm.formData?.category_2 ?? "",
+        book_desc: vm.formData?.book_desc ?? "",
+        tags: (vm.bookSelectedTags ?? []).map((t: any) => t.tag_name ?? t.name ?? ""),
+        characters: (vm.characters ?? []).map((c: any) => c.content).filter(Boolean),
+        disabled: !!vm.submitBtnDisabled,
+        titleError: vm.errorMessage?.title ?? "",
+        charactersError: vm.errorMessage?.characters?.find?.((x: string) => !!x) ?? "",
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** client_id → 站点名（`book/client-list` 权威；顺序与弹窗展示顺序不一定一致，按名字匹配最稳） */
+export async function resolveClientName(clientId: string): Promise<string | undefined> {
+  const r = await apiGet(API.bookClientList, { activity_id: "" });
+  if (!r.ok) return undefined;
+  const list = ((r.data as any)?.list ?? []) as any[];
+  const hit = list.find((c) => String(c.client_id) === String(clientId));
+  return hit?.client_name ? String(hit.client_name) : undefined;
+}
+
 /**
  * 新建作品。
  *
- * 默认 `confirm=false`：只打开建书页、读取当前表单、截图，**不填不提交**。
- * `confirm=true`：按 label 文本填表并点击提交按钮。
+ * 默认 `confirm=false`：只打开作品管理列表页读现状 + 截图，**不点「新建小说」不填不提交**。
+ * `confirm=true`：走完整真实流程（选站点 → 填表 → 选标签 → 确认创建）。
  *
- * ⚠️ 七猫建书页的具体 label 文案/必填项以真机为准；本函数用候选 label 列表匹配，
- *    未命中的字段会回在 `missing` 里，不会静默忽略。
+ * 不能省的必填（见上方注释）：书名 / 目标读者 / 一级分类 / 二级分类 / 简介 / 标签 / 主角名。
+ * 未显式传入的会填默认值并在 `filled` 里标注 `(默认)`，避免「按钮一直灰着」的迷惑失败。
  */
 export async function createBook(input: CreateBookInput): Promise<WriteResult> {
   assertCookies();
-  const session = await openSession(input.headless ?? true, "/front/book-upload");
+  const session = await openSession(input.headless ?? true, "/front/book-manage");
   if (isError(session)) return { ok: false, action: "error", message: session.error };
   const { browser, page } = session;
 
   try {
     const filled: Record<string, string> = {};
     const missing: string[] = [];
+    const notes: string[] = [];
 
     if (!input.confirm) {
       const shotPath = await shot(page, "book-create-preview");
@@ -144,65 +370,148 @@ export async function createBook(input: CreateBookInput): Promise<WriteResult> {
       return {
         ok: true,
         action: "preview",
-        message: `已打开建书页（confirm=false，未填表未提交）。当前表单字段：${Object.keys(await readForm(page)).join("/")}。核对无误后传 confirm=true。`,
+        message:
+          `已打开作品管理列表页（confirm=false，未点「新建小说」、未填表未提交）。` +
+          `⚠️ 建书没有独立路由：入口是列表页的「新建小说」按钮 → 选首发站点弹窗 → 作品信息表单。` +
+          `核对无误后传 confirm=true。`,
         screenshotPath: shotPath,
         filled: await readForm(page),
       };
     }
 
-    const title = await fillFirst(page, ["作品名称", "书名", "作品名", "小说名称"], input.bookName);
-    if (title.ok) filled[title.label as string] = input.bookName;
-    else missing.push("bookName(作品名称)");
+    // --- 0. 书名先按平台白名单清洗（全角括号等会被拒，导致提交按钮永远灰着） ---
+    const { title: safeName, changed: nameChanged } = cleanBookTitle(input.bookName);
+    if (!safeName) {
+      await browser.close().catch(() => {});
+      return { ok: false, action: "error", message: `书名清洗后为空（原值「${input.bookName}」）。七猫书名仅支持中英文、数字（含罗马数字Ⅰ~Ⅻ）与，「：！？」等中文标点。` };
+    }
+    if (nameChanged) notes.push(`书名已清洗：《${input.bookName}》→《${safeName}》（平台仅允许中英文/数字/罗马数字/中文标点）`);
 
-    if (input.abstract) {
-      const r = await fillFirst(page, ["作品简介", "简介", "内容简介"], input.abstract);
-      if (r.ok) filled[r.label as string] = input.abstract;
-      else missing.push("abstract(作品简介)");
+    const clientId = String(input.clientId ?? "1");
+    const clientName = await resolveClientName(clientId);
+    if (!clientName) {
+      await browser.close().catch(() => {});
+      return { ok: false, action: "error", message: `无法解析首发站点 client_id=${clientId}（读取 book/client-list 失败或该站点不存在）。` };
     }
 
-    for (const [key, val] of [
-      ["protagonist1", input.protagonist1],
-      ["protagonist2", input.protagonist2],
-    ] as const) {
-      if (!val) continue;
-      const r = await fillFirst(page, ["主角名", "主角名称", "主角", "人物名称"], val);
-      if (r.ok) filled[r.label as string] = val;
-      else missing.push(`${key}(主角名)`);
+    // --- 1. 列表页 → 新建小说 ---
+    if (!(await realClickText(page, "新建小说", { exact: true }))) {
+      const shotPath = await shot(page, "book-create-no-new-btn");
+      await browser.close().catch(() => {});
+      return { ok: false, action: "error", message: `未找到「新建小说」按钮（可能账号无建书权限或页面未加载完）。`, screenshotPath: shotPath };
     }
+    await sleep(2200);
 
-    if (input.category) {
-      const r = await clickInFormItem(page, "作品分类", input.category);
-      if (r) filled["作品分类"] = input.category;
-      else missing.push("category(作品分类)");
+    // --- 2. 选首发站点 → 确认 ---
+    if (!(await realClickByJs(page, jsSiteCard(clientName)))) {
+      const shotPath = await shot(page, "book-create-no-site");
+      await browser.close().catch(() => {});
+      return { ok: false, action: "error", message: `站点弹窗里未找到「${clientName}」卡片。`, screenshotPath: shotPath };
     }
+    await sleep(900);
+    if (!(await realClickByJs(page, jsDialogBtn("确认")))) {
+      // 站点弹窗的确认按钮可能不带 a.qm-btn，退回按文本点
+      await realClickText(page, "确认", { exact: true });
+    }
+    await sleep(3800);
+    filled["首发站点"] = clientName;
+    if (!page.url().includes("/information")) notes.push(`提示：确认站点后 URL 未出现 /information（当前 ${page.url()}），后续步骤可能失败。`);
 
-    // 提交
-    const clicked =
-      (await realClickText(page, "立即创建", { exact: true })) ||
-      (await realClickText(page, "创建作品", { exact: true })) ||
-      (await realClickText(page, "提交", { exact: true })) ||
-      (await realClickText(page, "完成", { exact: true }));
-    if (!clicked) {
-      const shotPath = await shot(page, "book-create-nobutton");
+    // --- 3. 目标读者（radio：0=男生 / 1=女生；工具的 gender 是 1=男频 → 站点 is_girl="0"） ---
+    const gender = input.gender ?? 1;
+    const readerIndex = gender === 1 ? 0 : 1;
+    if (await realClickByJs(page, jsFormItemRadio("目标读者", readerIndex))) {
+      filled["目标读者"] = gender === 1 ? "男生" : "女生";
+    } else missing.push("gender(目标读者)");
+    await sleep(1600); // 选完目标读者才会加载一级分类
+
+    // --- 4. 名称 / 分类 / 简介 / 主角 / 标签（与改作品信息共用同一套填充逻辑） ---
+    if (!input.abstract?.trim()) notes.push("未提供简介，已填默认占位（可在作品信息页再改）");
+    if (!input.protagonist1?.trim()) notes.push("未提供主角名，已填默认「主角」");
+    if (!input.tags?.length) notes.push("未指定标签，已按分组各取第一个");
+    if (!input.category) notes.push("未指定分类，已取第一个一级分类");
+    await fillBookInfoFields(
+      page,
+      {
+        bookName: safeName,
+        category: input.category ?? "",
+        categorySub: input.categorySub ?? "",
+        abstract: input.abstract?.trim() || `本作品简介待完善：${safeName}`,
+        protagonist1: input.protagonist1?.trim() || "主角",
+        protagonist2: input.protagonist2?.trim(),
+        tags: input.tags?.length ? input.tags : [""],
+      },
+      filled,
+      missing
+    );
+
+    // --- 9. 提交前读门禁（拿不到 Vue 状态就跳过，不影响主流程） ---
+    const state = await readCreateFormState(page);
+    if (state?.disabled) {
+      const shotPath = await shot(page, "book-create-blocked");
       await browser.close().catch(() => {});
       return {
         ok: false,
         action: "error",
-        message: `已填表但未找到提交按钮（可能按钮文案不同）。已填：${Object.keys(filled).join("/")}；缺：${missing.join("/") || "无"}。`,
+        message:
+          `建书前置条件未满足，未提交。前端提示：${state.titleError || state.charactersError || "（无文案，可能是必填项未选中）"}。` +
+          `必填＝书名/目标读者/一级分类/二级分类/简介/至少1个标签/至少1个主角名。状态：${JSON.stringify(state)}`,
         screenshotPath: shotPath,
         filled,
         missing,
       };
     }
 
-    await waitForText(page, "成功", 8000).catch(() => false);
+    // --- 10. 确认创建：以 `book/save-book-info` 的响应为准判成功 ---
+    let createdBookId = "";
+    const onResponse = async (resp: any) => {
+      try {
+        if (!String(resp.url()).includes("/book/save-book-info")) return;
+        const body = await resp.text();
+        const id = JSON.parse(body)?.data?.book_id;
+        if (id) createdBookId = String(id);
+      } catch {
+        /* 忽略解析失败 */
+      }
+    };
+    page.on("response", onResponse);
+
+    if (!(await realClickText(page, "确认创建", { exact: true }))) {
+      page.off("response", onResponse);
+      const shotPath = await shot(page, "book-create-nobutton");
+      await browser.close().catch(() => {});
+      return {
+        ok: false,
+        action: "error",
+        message: `未找到「确认创建」按钮。已填：${Object.keys(filled).join("/")}；缺：${missing.join("/") || "无"}。`,
+        screenshotPath: shotPath,
+        filled,
+        missing,
+      };
+    }
+    await sleep(6000);
+    page.off("response", onResponse).catch?.(() => {});
     const modal = await visibleModalText(page);
     const shotPath = await shot(page, "book-create-done");
     await browser.close().catch(() => {});
+
+    if (!createdBookId) {
+      return {
+        ok: false,
+        action: "error",
+        message: `已点「确认创建」但没抓到创建成功响应（book/save-book-info）。${modal ? `页面提示：${modal.slice(0, 200)}` : ""}建议核对列表。`,
+        screenshotPath: shotPath,
+        filled,
+        missing,
+      };
+    }
     return {
       ok: true,
       action: "created",
-      message: `已提交建书：《${input.bookName}》。${missing.length ? `未命中字段：${missing.join("/")}。` : ""}${modal ? `页面提示：${modal.slice(0, 200)}` : ""}`,
+      bookId: createdBookId,
+      message:
+        `已建书：《${safeName}》（book_id=${createdBookId}，站点：${clientName}）。` +
+        `${missing.length ? `未命中字段：${missing.join("/")}。` : ""}${notes.length ? notes.join(" ") : ""}`,
       screenshotPath: shotPath,
       filled,
       missing,
@@ -222,16 +531,23 @@ export interface UpdateBookInfoInput {
   protagonist1?: string;
   protagonist2?: string;
   category?: string;
+  categorySub?: string;
+  tags?: string[];
   confirm?: boolean;
   headless?: boolean;
 }
 
 /**
- * 修改已有作品信息（书名 / 简介 / 主角 / 分类）。
- * 默认 `confirm=false`：只打开作品信息页读现状 + 截图，**完全不填充**（避免误改线上）。
+ * 修改已有作品信息（书名 / 简介 / 主角 / 分类 / 标签）。
  *
- * ⚠️ 已知缺口：`category`（分类）与 `tags`（标签）**目前没有落到页面**——真机看清
- *    「分类 / 标签」控件（`book/book-option` 给出的 `tag_id` / `tag_name`）后需在此补齐。
+ * 走作品信息页 `/front/book-manage/information?id=…`（真机确认参数名是 `id`）；
+ * 该页与建书页是同一套 DOM，故填充逻辑与 `createBook` 共用 `fillBookInfoFields`
+ * ——只覆盖显式传入的字段，未传的保持原值。
+ *
+ * 默认 `confirm=false`：只打开页面读现状 + 截图，**完全不填充**（避免误改线上）。
+ *
+ * ⚠️ 保存成功后平台可能要求**重新审核**；书名 / 简介改动会影响曝光，请谨慎。
+ * ⚠️ 「保存」按钮的真实文案（`确认创建` / `保存` / `立即修改`）尚未真机联调，见下方候选。
  */
 export async function updateBookInfo(input: UpdateBookInfoInput): Promise<WriteResult> {
   assertCookies();
@@ -256,29 +572,39 @@ export async function updateBookInfo(input: UpdateBookInfoInput): Promise<WriteR
 
     const filled: Record<string, string> = {};
     const missing: string[] = [];
-    const plan: [string[], string | undefined, string][] = [
-      [["作品名称", "书名", "作品名"], input.bookName, "bookName"],
-      [["作品简介", "简介", "内容简介"], input.abstract, "abstract"],
-      [["主角名", "主角", "人物名称"], input.protagonist1, "protagonist1"],
-    ];
-    for (const [labels, value, key] of plan) {
-      if (!value) continue;
-      const r = await fillFirst(page, labels, value);
-      if (r.ok) filled[r.label as string] = value;
-      else missing.push(key);
+    const { title: safeName } = input.bookName ? cleanBookTitle(input.bookName) : { title: "" };
+    if (input.bookName && safeName !== input.bookName.trim()) {
+      missing.push(`bookName(已按平台字符白名单清洗为「${safeName}」)`);
     }
+
+    await fillBookInfoFields(
+      page,
+      {
+        bookName: input.bookName ? safeName : undefined,
+        abstract: input.abstract,
+        protagonist1: input.protagonist1,
+        protagonist2: input.protagonist2,
+        category: input.category,
+        categorySub: input.categorySub,
+        tags: input.tags,
+      },
+      filled,
+      missing
+    );
 
     const clicked =
       (await realClickText(page, "保存", { exact: true })) ||
       (await realClickText(page, "提交", { exact: true })) ||
-      (await realClickText(page, "立即修改", { exact: true }));
+      (await realClickText(page, "立即修改", { exact: true })) ||
+      (await realClickText(page, "确认", { exact: true }));
+    const modal = await visibleModalText(page);
     const shotPath = await shot(page, "book-info-done");
     await browser.close().catch(() => {});
     return {
       ok: clicked,
       action: clicked ? "updated" : "error",
       message: clicked
-        ? `已提交作品信息修改（bookId=${input.bookId}）。${missing.length ? `未命中字段：${missing.join("/")}。` : ""}`
+        ? `已提交作品信息修改（bookId=${input.bookId}）。已填：${Object.keys(filled).join("/") || "无"}。${missing.length ? `注意：${missing.join("/")}。` : ""}${modal ? `页面提示：${modal.slice(0, 200)}` : ""}`
         : `已填表但未找到保存按钮。缺：${missing.join("/") || "无"}。`,
       screenshotPath: shotPath,
       filled,
@@ -292,12 +618,21 @@ export async function updateBookInfo(input: UpdateBookInfoInput): Promise<WriteR
 
 /**
  * 只改「分类 / 标签」的快捷入口（内部就是 updateBookInfo 的薄包装）。
- * 语义是「确保这些标签处于选中」，已选中的会跳过。
+ * 语义是「确保这些分类 / 标签处于选中」。标签按分组顺序取用（见 `createBook` 的说明）。
  */
-export async function setBookTags(input: { bookId: string; tags?: string[]; category?: string; confirm?: boolean; headless?: boolean }): Promise<WriteResult> {
+export async function setBookTags(input: {
+  bookId: string;
+  tags?: string[];
+  category?: string;
+  categorySub?: string;
+  confirm?: boolean;
+  headless?: boolean;
+}): Promise<WriteResult> {
   return updateBookInfo({
     bookId: input.bookId,
     category: input.category,
+    categorySub: input.categorySub,
+    tags: input.tags,
     confirm: input.confirm,
     headless: input.headless,
   });
@@ -309,14 +644,24 @@ export interface BookOptionTag {
   tagId: string;
   name: string;
 }
+/** 一级分类（含二级 `children`） */
+export interface BookOptionCategory {
+  id: string;
+  name: string;
+  children: { id: string; name: string }[];
+}
 export interface BookOptionGroup {
   typeId: number;
+  /** 分组名（风格 / 角色 / 情节 / 背景） */
+  typeName?: string;
   tags: BookOptionTag[];
 }
 export interface BookOptionGender {
   index: number;
-  /** 一级 / 二级分类（真机上作者无书时可能为空数组） */
-  categories: BookOptionTag[];
+  /** 频道：0=男频，1=女频（与站点 `is_girl` 一致） */
+  isGirl: string;
+  /** 一级 / 二级分类（`children` 为二级） */
+  categories: BookOptionCategory[];
   groups: BookOptionGroup[];
 }
 export interface ListBookOptionsResult {
@@ -326,20 +671,23 @@ export interface ListBookOptionsResult {
   genders?: BookOptionGender[];
   /** 全部标签去重后的平铺列表，方便直接挑选 */
   tags?: BookOptionTag[];
-  /** 其它可选配置（有奖征文、上传图片限制等） */
+  /** 有奖征文活动列表（建书时若该站点显示则必选） */
+  activities?: unknown;
+  /** 其它可选配置（图片上传限制等） */
   extra?: unknown;
 }
 
 /**
  * 读分类 / 标签可选项。
  *
- * 走 `book/book-option`（真机验证 2026-10）：`data.category_list[i].tag_info[j].select_list[]`
- * = `{id, tag_id, tag_name}`，i 为男频/女频两组。早先走的 `/book/tag-list-option` 缺参会
- * 40001002 参数错误，已弃用。
+ * 走 `book/book-option?client_id=…`（2026-10 真机验证）。结构：
+ * `data.category_list[is_girl]` = `{category:[{id, category_name, children:[{id, category_name}]}], tag_info:[{type_id, type_name, select_list:[{id, tag_id, tag_name}]}]}`，
+ * 其中 **`category_list` 的下标与「目标读者」一致：0=男频，1=女频**（前端 `firstCategory` computed 即如此取）。
+ * ⚠️ 必须带 `client_id`（不同站点分类不同）；不带参会拿到不完整数据。
  */
-export async function listBookOptions(): Promise<ListBookOptionsResult> {
+export async function listBookOptions(opts: { clientId?: string } = {}): Promise<ListBookOptionsResult> {
   assertCookies();
-  const r = await apiGet(API.bookOption);
+  const r = await apiGet(API.bookOption, { client_id: String(opts.clientId ?? "1") });
   if (!r.ok) return { ok: false, message: `读取分类/标签选项失败：${r.error}` };
 
   const d: any = r.data ?? {};
@@ -352,11 +700,24 @@ export async function listBookOptions(): Promise<ListBookOptionsResult> {
   const genders: BookOptionGender[] = (Array.isArray(d.category_list) ? d.category_list : []).map(
     (c: any, index: number): BookOptionGender => ({
       index,
-      categories: (Array.isArray(c?.category) ? c.category : []).map(toTag).filter((t: BookOptionTag) => t.name),
-      groups: (Array.isArray(c?.tag_info) ? c.tag_info : []).map((t: any): BookOptionGroup => ({
-        typeId: Number(t?.type_id ?? 0),
-        tags: (Array.isArray(t?.select_list) ? t.select_list : []).map(toTag).filter((x: BookOptionTag) => x.name),
-      })),
+      isGirl: String(index),
+      categories: (Array.isArray(c?.category) ? c.category : [])
+        .map((cat: any): BookOptionCategory => ({
+          id: String(cat?.id ?? ""),
+          name: String(cat?.category_name ?? cat?.name ?? ""),
+          children: (Array.isArray(cat?.children) ? cat.children : []).map((k: any) => ({
+            id: String(k?.id ?? ""),
+            name: String(k?.category_name ?? k?.name ?? ""),
+          })),
+        }))
+        .filter((cat: BookOptionCategory) => cat.name),
+      groups: (Array.isArray(c?.tag_info) ? c.tag_info : []).map(
+        (t: any): BookOptionGroup => ({
+          typeId: Number(t?.type_id ?? 0),
+          typeName: t?.type_name ? String(t.type_name) : undefined,
+          tags: (Array.isArray(t?.select_list) ? t.select_list : []).map(toTag).filter((x: BookOptionTag) => x.name),
+        })
+      ),
     })
   );
 
@@ -373,15 +734,20 @@ export async function listBookOptions(): Promise<ListBookOptionsResult> {
     }
   }
 
+  const catCount = genders.reduce((n, g) => n + g.categories.reduce((m, c) => m + 1 + c.children.length, 0), 0);
   return {
     ok: true,
-    message: `已读取分类/标签选项：${genders.length} 组（男频/女频）、去重后 ${tags.length} 个标签。`,
+    message:
+      `已读取分类/标签选项（client_id=${opts.clientId ?? "1"}）：${genders.length} 组（0=男频/1=女频）、` +
+      `${catCount} 个分类（含二级）、去重后 ${tags.length} 个标签。`,
     genders,
     tags,
+    activities: d.book_activity_list ?? null,
     extra: {
-      book_activity_list: d.book_activity_list,
       book_config: d.book_config,
       upload_image_config: d.upload_image_config,
+      is_edit_cover: d.is_edit_cover,
+      is_girl_list: d.is_girl_list,
     },
   };
 }

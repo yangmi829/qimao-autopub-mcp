@@ -13,21 +13,42 @@ export function authorBase() {
 export function authorLoginUrl() {
     return process.env.QIMAO_AUTHOR_URL || `${authorBase()}/front/register-login/login`;
 }
-/** 作品管理（长篇） */
+/** 作品管理（长篇）列表页——「新建小说」按钮就在这里 */
 export function bookManageUrl() {
     return process.env.QIMAO_BOOK_MANAGE_URL || `${authorBase()}/front/book-manage`;
 }
-/** 新建长篇作品 */
-export function createBookUrl() {
-    return `${authorBase()}/front/book-upload`;
+/**
+ * 建书表单页。⚠️ 真机（2026-10）确认：**建书没有独立路由**——
+ * 入口是列表页的「新建小说」按钮 → 「选择首发站点」弹窗 → `POST book/client-choose`
+ * → 才跳到本页填表（`submitBtnDisabled` 的全部门禁见 `services/book.ts:createBook`）。
+ *
+ * `client_id`：**1=七猫中文网，3=纵横中文网**（`book/client-list` 权威；`client_config` 里还有 2/4/5/6）。
+ */
+export function bookCreateFormUrl(clientId = 1) {
+    return `${authorBase()}/front/book-manage/information?client_id=${encodeURIComponent(String(clientId))}`;
 }
-/** 短篇作品管理 */
+/**
+ * ⚠️ 历史遗留名：早期误以为 `/front/book-upload` 是建书页，实际它是**章节编辑器**
+ * （前端路由表 meta.title = 「作品管理-上传章节」）。现在指向作品管理列表页（建书入口所在）。
+ */
+export function createBookUrl() {
+    return bookManageUrl();
+}
+/** 短篇作品管理列表页（「新建短故事」按钮在这里） */
 export function shortManageUrl() {
     return `${authorBase()}/front/book-manage/short`;
 }
-/** 新建短篇作品 */
+/**
+ * ⚠️ 历史遗留名：早期误以为 `/front/book-upload/short` 是短篇创建页，实际它是
+ * **短篇的章节编辑器**（路由名 `short-book-upload-editor`，meta.title 同为「作品管理-上传章节」）。
+ */
+export function shortChapterEditUrl(bookId) {
+    const base = `${authorBase()}/front/book-upload/short`;
+    return bookId === undefined || bookId === "" ? base : `${base}?id=${encodeURIComponent(String(bookId))}`;
+}
+/** @deprecated 见 `shortChapterEditUrl` / `shortManageUrl`。 */
 export function shortCreateUrl() {
-    return `${authorBase()}/front/book-upload/short`;
+    return shortManageUrl();
 }
 /** 作品数据（统计） */
 export function bookDataUrl() {
@@ -38,30 +59,33 @@ export function incomeManageUrl() {
     return `${authorBase()}/front/income-manage`;
 }
 /**
- * 章节管理页（章节列表 + 章节编辑器）：`/front/book-manage/manage?book_id=…`
+ * 章节**编辑器**（写新章 / 改已有章）：`/front/book-upload?id=<bookId>[&cid=<chapterId>]`
  *
- * 真实路由与参数名取自前端路由表（`path:"manage", name:"book-manage_chapter-manage"`）
- * 与接口 `book-chapter/chapter-tabs-options` 返回的 `tab_url`（2026-10 真机验证）。
- * ⚠️ 早先写成 `/front/book-manage/{bookId}` 是**错的**（那个路径在前端路由表里不存在）。
- * 查询参数用 snake_case `book_id`（与站内其它查询参数一致，如 `chat-prompt-text?params={"book_id":0}`）。
+ * 真机（2026-10）验证：章节管理页的「新建章节」就跳这里，参数是 **`id`**（不是 `book_id`）与 **`cid`**。
+ * ⚠️ **不带 `cid` 打开会自动创建一条草稿章节**（平台行为），返回时页面 URL 里会带上新的 `cid`。
+ * ⚠️ 早先写成 `/front/book-manage/manage?book_id=…` 也不对——那是**章节管理列表**（见 `chapterManageUrl`）。
  */
 export function chapterEditUrl(bookId, chapterId) {
-    const base = `${authorBase()}/front/book-manage/manage?book_id=${encodeURIComponent(String(bookId))}`;
+    const base = `${authorBase()}/front/book-upload?id=${encodeURIComponent(String(bookId))}`;
     return chapterId === undefined || chapterId === ""
         ? base
-        : `${base}&chapter_id=${encodeURIComponent(String(chapterId))}`;
+        : `${base}&cid=${encodeURIComponent(String(chapterId))}`;
 }
-/** 作品信息页（改书名 / 简介 / 主角 / 分类标签）：`/front/book-manage/information/?book_id=…` */
+/** 章节管理列表页：`/front/book-manage/manage?id=…`（真机确认参数名是 `id`） */
+export function chapterManageUrl(bookId) {
+    return `${authorBase()}/front/book-manage/manage?id=${encodeURIComponent(String(bookId))}`;
+}
+/** 作品信息页（改书名 / 简介 / 主角 / 分类标签）：`/front/book-manage/information?id=…` */
 export function bookInfoUrl(bookId) {
-    return `${authorBase()}/front/book-manage/information/?book_id=${encodeURIComponent(String(bookId))}`;
+    return `${authorBase()}/front/book-manage/information?id=${encodeURIComponent(String(bookId))}`;
 }
-/** 短篇信息页（短篇的分类 / 简介等）：`/front/book-manage/short/information?book_id=…` */
+/** 短篇信息页（短篇的分类 / 简介等）：`/front/book-manage/short/information?id=…` */
 export function shortStoryInfoUrl(bookId) {
-    return `${authorBase()}/front/book-manage/short/information?book_id=${encodeURIComponent(String(bookId))}`;
+    return `${authorBase()}/front/book-manage/short/information?id=${encodeURIComponent(String(bookId))}`;
 }
-/** 章节草稿箱：`/front/book-manage/draft?book_id=…` */
+/** 章节草稿箱：`/front/book-manage/draft?id=…` */
 export function chapterDraftUrl(bookId) {
-    return `${authorBase()}/front/book-manage/draft?book_id=${encodeURIComponent(String(bookId))}`;
+    return `${authorBase()}/front/book-manage/draft?id=${encodeURIComponent(String(bookId))}`;
 }
 /** 章节目录（真实站内路由，供返回里提示用户去哪里核对） */
 export function chapterRoutes() {

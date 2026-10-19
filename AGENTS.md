@@ -54,22 +54,42 @@
 
 **真机口径**：`/api/author/profile` **不带 `/pc/v1`**（写成 `/api/pc/v1/author/profile` 会 404）；作品列表分页是 **`next_id` 游标**（页面只发 `next_id`+`t`，响应 `{data:{list,total,next_id}}`，空串=没有下一页）；分类 / 标签走 **`book/book-option`**（`tag-list-option` 无参报 `40001002`）；查询参数一律 **snake_case**（`book_id` / `chapter_id`）。签名 `concat`（去掉 `&`）风格已在登录态下确认可用。
 
-## 写路径现状（未真机联调，联调改动点都在这里）
+## 写路径现状（2026-10 全部真机联调通过）
 
-写路径（**只有这部分还没真机验证**）是按前端结构"押注"写的，**label 文案 / 按钮文案 / 成功判据一律以真机为准**。工具对字段用「候选 label 列表 + 多候选按钮文案」匹配，**未命中的字段会回在结果里的 `missing`（不会静默忽略）**，改版时优先改下面这些；**路由与查询参数已按前端路由表校正，不用再猜**：
+写路径驱动真实页面（真实鼠标 + 真实键盘），**已逐条联调过**；label / 按钮文案仍按「多候选 + 未命中回 `missing`」处理（平台改版时优先改这里，不要改流程）。**路由与查询参数按前端路由表 + 真机抓包校正过，不用再猜**：
 
-- **建书** `services/book.ts:createBook`：`/front/book-upload`。书名候选 `作品名称|书名|作品名|小说名称`，简介 `作品简介|简介|内容简介`，主角 `主角名|主角名称|主角|人物名称`，分类走 `clickInFormItem("作品分类", …)`；提交候选 `立即创建|创建作品|提交|完成`。
-- **改作品信息** `services/book.ts:updateBookInfo`：`bookInfoUrl()` = `/front/book-manage/information/?book_id=…`（snake_case，**已校正**）。候选 label 同上；提交候选 `保存|提交|立即修改`。
-- **章节** `services/chapter.ts:writeChapter`：`chapterEditUrl()` = `/front/book-manage/manage?book_id=…`（改章附加 `&chapter_id=…`，**已校正**；旧写法 `/front/book-manage/{bookId}` 是错的）。标题 `章节名|章节标题`，序号 `章节序号|序号`，正文优先 `.ProseMirror` / `[contenteditable='true']`，退回 label `正文|章节内容`；提交候选 `发布|提交|保存|确定`。
-- **短篇** `services/shortStory.ts`：新建 `/front/book-upload/short`，信息页 `shortStoryInfoUrl()` = `/front/book-manage/short/information?book_id=…`，管理 `/front/book-manage/short`。标题 `作品名称|书名`，正文 `正文|作品正文`，分类 `分类|作品分类`；提交候选与建书 / 章节类似。
-- **删除**：章节 / 短篇的删除图标**没有稳定选择器**，目前按文案点 `删除` → `确定` 兜底（真机确认后应换成稳定选择器）。
+- **建书** `services/book.ts:createBook`：入口是列表页「新建小说」→ **「选择首发站点」弹窗**（`client_id`：1=七猫中文网 / 3=纵横中文网）→ `POST book/save-book-info` 返回 `book_id`。必填门（前端 `submitBtnDisabled`）：书名 && 目标读者 && 一级分类 && 二级分类 && 简介 && ≥1 标签 && ≥1 主角名。书名走 `core/text.ts:cleanBookTitle` 白名单清洗（全角括号等会被平台拒 → 按钮永远灰着）。
+- **改作品信息 / 标签** `services/book.ts:updateBookInfo`：`bookInfoUrl()` = `/front/book-manage/information?id=…`（**`?id=`，不是 `?book_id=`**）。分类 / 标签落地在 `fillBookInfoFields`（建书 / 改信息 / 短篇共用同一份），`set_book_tags` 不再空操作。
+- **章节** `services/chapter.ts:writeChapter`：`chapterEditUrl()` = `/front/book-upload?id=<bookId>`（改章附加 `&cid=<chapterId>`）。编辑器**没有 `.el-form-item`**（不是表单结构），只能按结构定位：序号 `input.el-input__inner[maxlength=5]`、章节名 `textarea[placeholder*=章节名称]`、正文 `div.q-contenteditable.book`。提交：`mode=publish`「立即发布」（≥1000 字）→ `draft-publish-confirm` 弹窗「确认发布」→「重要提醒」里点「我已阅读并知晓」→ 再「确认发布」→ `POST /api/pc/v2/book-chapter/draft-publish`；`mode=draft`「更新草稿 / 存为草稿」。**只点一层会「看起来成功但仍是草稿」**。
+- **短篇** `services/shortStory.ts`：见下节（与长篇差异最大）。
+- **删除**：短篇走**按书名定位行**（行内没有 `book_id`，`编辑正文` 的 href 是 `javascript:void(0)`）→ 行内「删除」→ 弹「作品删除提示」→ 点 **「永久删除」**（带 2s 倒计时，倒计时内点击无效）→ `POST /api/pc/v1/book/del-book`。
 
-**已知缺口（联调时补齐）**：
-1. **`list_chapters_qimao` 的入参未校准**：`book-chapter/list` 只传 `book_id` 会报 `40001002 请求参数错误`，说明还需卷 / 类型等参数——**必须等有真实作品后才能抓包确认**（账号当前 0 部作品）。
-2. `update_book_info_qimao` 的 `plan` 里**没有分类 / 标签分支**，`input.category` 声明了但没被使用；`set_book_tags` 只是把 `category` 转发给 `updateBookInfo` —— 所以 `set_book_tags` **目前等于空操作**（既不选分类也不选标签）。真机看清「分类 / 标签」控件的 DOM 后，在 `services/book.ts` 里补实现（可选项已能从 `book/book-option` 读到）。
-3. 成功判据目前只等 `成功` 文本 + 读可见模态，未必可靠；拿到真机流程后应收紧（对齐真实 toast / 跳转 / 列表回读）。
-4. 详情类响应字段名仍未完全确认，保留了多命名容错 `pick()` / `extractList()`，**写路径联调时一并收敛为确定字段名**（列表类已确认 `{data:{list,total,next_id}}`）。
-5. 短篇字数 `SHORT_MIN_WORDS=3000` / `SHORT_MAX_WORDS=100000` 是经验值，只软提示不硬拦；平台真实规则可从 `/api/pc/v1/global/config` 的 `client_config[id].word_count[]` 取。
+### 短篇专章（真机 2026-10）
+
+- **建篇** `createShortStory`：短故事列表页（`/front/book-manage/short`）「新建短故事」→ **直接跳**信息表单页 `/front/book-manage/short/information`（**没有长篇那样的站点选择弹窗**）；渠道 `client_id` 由页面写死 = **5**（见 `SHORT_CLIENT_ID`，**不在 `book/client-list` 里**，分类 / 标签选项也走 `book-option?client_id=5`）。表单结构、必填门、提交按钮（「确认创建」）与长篇**同一个组件**，故复用 `fillBookInfoFields` / `readCreateFormState`。
+- **发正文** `publishShortStory`：编辑器 `/front/book-upload/short?id=<bookId>`（`chapter-index` 回读 `book_info.client_id=5` 可自证）。
+  - **没有章节名输入框**（标题＝作品名；正文内小标题用工具栏把「正文」切成「标题」样式），所以 `title` 在这条路径只作提示、不填充。
+  - 字数门 **4000–70000**（`global/config` → `client_config[5].word_count[type=1]`，与页头文案一致）。
+  - 按钮随状态变：新建＝`存为草稿` / `立即发布`；存过一次草稿＝`更新草稿`；已发布过＝`更新章节`。
+  - **发布必须走「智能分章」三步**：①「立即发布」→ 弹「章节格式不满足发布要求，是否智能分章？」→「开始拆分」（`POST book-chapter/smart-split`）；② 弹「智能分章结果」（目录 01/02/…）→「保存分章结果」（`POST book-chapter/smart-split/result-decision`，`decision_status=10`）；③ **再点一次**「立即发布」→ 平台**查重**（重复率高会弹「本章存在重复内容…」直接拦下）→ 两层确认。`mode=draft` 只需「存为草稿」→「我已阅读并知晓」。
+  - 成功判据：publish ＝ `draft-publish` 响应 OK **或** 回读列表字数 > 0；draft ＝ 回读列表字数 > 0 **或** toast 含「成功/已保存」。**真机口径：只有显式提交才会把字数写进列表，编辑器自动保存不会**（先自动保存再查列表，字数仍是 0）。
+- **删篇** `deleteShortStory`：见上文「删除」。⚠️ 必须先读列表拿**书名**再按书名定位行，否则会误删列表第一行（行内无 `book_id`）。
+
+### 写路径踩过的坑（照抄即可，别重蹈）
+
+1. **JS 赋 `value` / `.click()` 平台不认**（Vue 2 + 类 Element-UI 只认原生键鼠事件）——一律用 `page.ts` 的 `realClick*` / `realTypeByJs`。
+2. **`a.textContent` 精确等号匹配会失败**：行内按钮的锚点文本混着不可见字符（零宽 / 私有区图标），判「删除」「编辑正文」这类按钮要改用 `/删除/.test(text)` 的包含匹配。
+3. **`textContent` 里放反引号会截断 TS 模板字符串**：往模板字符串里写「按 JS 定位」的表达式时，注释里别用反引号（TS1005 报错点会很迷惑）。
+4. **`waitForText("短故事")` / `waitForText("小说")` 会被左侧菜单提前满足**，等不到列表渲染——要等列表就轮询 `document.querySelectorAll(".book-detail-wrap").length > 0`。
+5. **平台弹层常带倒计时**（「我已阅读并知晓(3)」「永久删除 2s」）：倒计时内点击无效，必须轮询点到弹窗真的消失。
+6. `page.on("response")` 判成功时**务必排除只读接口**（`*-list-v2` / `book-option` / `client-list`）与 `auto-save-chapter`，否则会把「列表加载 / 自动保存」当成提交成功。
+
+### 已知缺口（还没做，不要当成已支持）
+
+1. **长篇作品没有删除工具**（平台侧是 `POST /api/pc/v1/book/del-book` + 列表行「删除」→「永久删除」，与短篇同一套；缺一个 `delete_book_qimao` 封装）。
+2. `list_chapters_qimao` 的入参是**真机校准过**的（`book_id` + 卷 / `tab`），但 `data_total` 的含义偏「已过审条数」，别当「已提交条数」（详情见函数注释）。
+3. 定时发布（章节 `mode=schedule`）只填时间、**时间选择器未联调**，失败会如实回报让用户手动核对。
+4. 短篇**查重（重复率）不做预检**：由平台在发布步骤拦下，返回里带原文案。
 
 ## 架构
 
