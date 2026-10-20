@@ -1,4 +1,5 @@
 import { sleep, shot } from "../browser/driver.js";
+import { NEXT_STEP_BOOK_CREATED, NEXT_STEP_SHORT_PUBLISHED } from "../core/reminders.js";
 import {
   API,
   apiGet,
@@ -358,7 +359,8 @@ export async function createShortStory(input: WriteShortInput): Promise<WriteSho
       message:
         `已建短篇：《${safeName}》（book_id=${createdBookId}，client_id=${SHORT_CLIENT_ID}）。` +
         `正文请再用 publish_short_story_qimao 带 book_id 发布。` +
-        `${missing.length ? `未命中字段：${missing.join("/")}。` : ""}${notes.length ? notes.join(" ") : ""}`,
+        `${missing.length ? `未命中字段：${missing.join("/")}。` : ""}${notes.length ? notes.join(" ") : ""}` +
+        NEXT_STEP_BOOK_CREATED,
       screenshotPath: shotPath,
       filled,
       missing,
@@ -634,7 +636,8 @@ export async function publishShortStory(input: WriteShortInput): Promise<WriteSh
       message:
         `已点「${clicked}」（book_id=${input.bookId}）。${finalNotes.length ? finalNotes.join("；") + "。" : ""} ` +
         stateLabel +
-        `：${JSON.stringify(state)}。`,
+        `：${JSON.stringify(state)}。` +
+        (mode === "publish" && okSignal ? NEXT_STEP_SHORT_PUBLISHED : ""),
       screenshotPath: shotPath,
       bookId: input.bookId,
       filled: { ...filled, ...(verified !== undefined ? { 回读校验: verified ? "通过" : "未通过" } : {}) },

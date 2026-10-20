@@ -1,4 +1,5 @@
 import { sleep, shot } from "../browser/driver.js";
+import { NEXT_STEP_CHAPTER_PUBLISHED } from "../core/reminders.js";
 import { API, apiGet, openSession, isError, chapterEditUrl, chapterManageUrl, authorBase } from "../browser/endpoints.js";
 import { realClickText, visibleModalText, visibleToastText, acceptPublishConfirm, waitForPublishGate, waitForText, textOf, fillInput, describeAiDeclaration, } from "../browser/page.js";
 import { logger } from "../core/logger.js";
@@ -368,7 +369,8 @@ export async function writeChapter(input) {
             action: okSignal ? action : "error",
             message: `已点「${clicked}」（bookId=${input.bookId}${input.chapterId ? `, chapterId=${input.chapterId}` : ""}）。` +
                 `${notes.length ? notes.join("；") + "。" : ""}` +
-                ` 编辑器现状：${JSON.stringify(state)}。`,
+                ` 编辑器现状：${JSON.stringify(state)}。` +
+                (mode === "publish" && okSignal ? NEXT_STEP_CHAPTER_PUBLISHED : ""),
             screenshotPath: shotPath,
             chapterId: input.chapterId ?? cidFromUrl,
             filled,

@@ -1,4 +1,5 @@
 import { logger } from "../core/logger.js";
+import { NEXT_STEP_BOOK_CREATED } from "../core/reminders.js";
 import { sleep, shot } from "../browser/driver.js";
 import { API, apiGet, openSession, isError, bookManageUrl, createBookUrl, bookInfoUrl, shortStoryInfoUrl, SHORT_CLIENT_ID, authorBase } from "../browser/endpoints.js";
 import { fillByLabel, readForm, clickInFormItem } from "../browser/form.js";
@@ -579,7 +580,8 @@ export async function createBook(input: CreateBookInput): Promise<WriteResult> {
       bookId: createdBookId,
       message:
         `已建书：《${safeName}》（book_id=${createdBookId}，站点：${clientName}）。` +
-        `${missing.length ? `未命中字段：${missing.join("/")}。` : ""}${notes.length ? notes.join(" ") : ""}`,
+        `${missing.length ? `未命中字段：${missing.join("/")}。` : ""}${notes.length ? notes.join(" ") : ""}` +
+        NEXT_STEP_BOOK_CREATED,
       screenshotPath: shotPath,
       filled,
       missing,

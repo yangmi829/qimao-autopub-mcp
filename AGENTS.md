@@ -49,6 +49,7 @@
 13. **页面级文本判断会被「编辑器正文」污染**：`document.body.innerText` 包含正在编辑的稿件正文，用关键词扫整页会把正文里的词误判成页面限制。判限制 / 成功一律**只看可见模态**（`visibleModalText()`），返回里带上命中文案。
 14. **远程传输（Streamable HTTP）的安全红线**：① 只有显式 `--http` / `QIMAO_TRANSPORT=http` 才开，stdio 默认路径**不许**引入 http 相关副作用（`src/index.ts` 用动态 `import("./http.js")`，别改成顶层 import）；② **回环地址免鉴权、非回环必填 Token**：`QIMAO_HTTP_HOST` 是 `127.0.0.1` / `localhost` / `::1` 时允许不设 `QIMAO_HTTP_TOKEN`（本机零配置），此时 `http.ts` 完全不校验 `Authorization`；一旦绑非回环地址，`remoteOptions()` 在缺 Token 时**必须**抛错拒绝启动（宁可起不来也不能裸奔暴露写权限），Token 给得短（<16 字符）同样拒绝。判断只能用 `isLoopback(host)`，别写死字面量；Token 比对用 `crypto.timingSafeEqual`（哈希后比，避免长度泄漏）；③ 默认只监听 `127.0.0.1`，绑非回环要告警；④ 新增写工具时**必须**确认 `core/remote.ts` 的 `isWriteTool()` 能判到它（显式名单 `WRITE_TOOLS` + 前缀正则兜底），否则 `QIMAO_HTTP_READONLY=1` 会漏；⑤ 只读拦截做在 HTTP 协议入口（`tools/call` 的 `params.name`），不改 `buildServer()`，因为 stdio 本地用法要保持全功能；⑥ `/health` 是唯一免鉴权端点，只许回最小信息，别往里塞 cookies / 路径等敏感内容；⑦ 启动日志里的 `远程端点已就绪: http://…` 一行是 `scripts/smoke.mjs` 的解析锚点，改文案要同步改冒烟正则。
 15. **数据目录三级解析**（`core/paths.ts`）：`QIMAO_DATA_DIR` → `<项目根>/data`（目录存在即用，保住仓库内 / clone 的历史行为）→ `~/.qimao-autopub`（npm / npx 安装：发布包不含 `data/`，包目录在 npm 缓存里会被清）。`DATA_DIR_SOURCE` 会进启动日志与 `get_publish_status` / `--selfcheck` 的 `details`，排障先看它。**别把默认值改成「包目录」**，那等于让 npx 用户的登录态和文稿库随时蒸发。
+16. **发布类工具成功返回必须带「人工下一步」**：建书 / 建短篇 / 发章 / 发短篇 / 批量发布成功后，把 `core/reminders.ts` 的 `NEXT_STEP_*` 拼进 `message`——提醒用户去七猫作者后台「作品管理 → 签约」申请签约、到「章节管理 / 短故事管理」看审核结果。签约与审核只能在后台由本人操作（合同 / 实名），MCP 不做也不代做。**只在真的提交且成功的分支拼**（单次发布是 `confirm=true`，批量是 `opts.confirm` 为真），预览 / 失败不要带。
 
 ## 只读路径现状（2026-10 已真机联调通过）
 

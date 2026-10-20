@@ -8,6 +8,7 @@ import type { Article, Novel, PublishTask } from "../types.js";
 import { uploadChapter } from "./chapter.js";
 import { analyzeOriginality } from "./originality.js";
 import { sleep } from "../browser/driver.js";
+import { NEXT_STEP_CHAPTER_PUBLISHED } from "../core/reminders.js";
 
 /** 把长正文写到 data/export 下的文件，返回路径（避免超长文本塞进工具参数） */
 export function writeExportFile(fileName: string, content: string): string {
@@ -376,7 +377,7 @@ export async function batchPublishChapters(opts: BatchPublishOptions): Promise<B
   return {
     ok: failed === 0,
     message: opts.confirm
-      ? `批量上传完成：成功 ${succeeded} / 失败 ${failed}（共 ${results.length} 章）。`
+      ? `批量上传完成：成功 ${succeeded} / 失败 ${failed}（共 ${results.length} 章）。${NEXT_STEP_CHAPTER_PUBLISHED}`
       : `演练模式（confirm=false）：仅对第 1 章做了「填表不提交」预览，共待发布 ${targets.length} 章。`,
     total: results.length,
     succeeded,
