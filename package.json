@@ -1,6 +1,6 @@
 {
   "name": "qimao-autopub-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "七猫小说（zuozhe.qimao.com）自动发布 MCP：登录 / 作品列表 / 新建作品 / 作品信息与标签 / 章节增删改与批量发布 / 短篇 / 数据与收益 / 本地文稿库",
   "type": "module",
   "main": "dist/index.js",
