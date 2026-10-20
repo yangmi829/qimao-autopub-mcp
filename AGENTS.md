@@ -22,6 +22,8 @@
 - 依赖极简：运行时只依赖 `@modelcontextprotocol/sdk` + `zod`，浏览器驱动 `puppeteer-core` 是 **optionalDependency**（装不上时只读与本地工具照用）。
 - **版本号不许写死**：`src/index.ts` 的 `SERVER_VERSION` 必须取 `core/paths.ts` 的 `PACKAGE_VERSION`（读 `package.json`）。`scripts/smoke.mjs` 有 2 条断言（stdio `getServerVersion()` 与远程 `/health` 的 `version` 都须等于 `package.json` 的 `version`）盯着这件事。
 - **发布到 npm 时 `package.json` 的 `files` 是白名单**（`dist` / `README.md` / `LICENSE`）——`data/*` **绝不能**进 tarball（里面有有效登录 cookies）。`.gitignore` 只保护 git：npm 仅在既无 `files` 又无 `.npmignore` 时才回退读 `.gitignore`。改发布配置后必跑 `npm pack --dry-run --json` 核对文件清单。`prepack` 会 `npm run build`，但仓库里的 `dist/` 仍要手动同步提交。
+- **npm 发布凭据（2026-10-20 实操）**：`npm login` 拿到的会话 token、以及不带 bypass 的 classic/granular token 都会被拒：`403 … Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages`（`--otp=` 也救不了，registry 在验 OTP 前就按 token 类型拒）。可行解只有一个——官网 **Access Tokens → Generate New Token → Granular**：勾 **Bypass two-factor authentication**、权限 **Read and write (publish and stage)**、包选 **All Packages**（新包在「Only select packages」下拉里搜不到），有效期设最短，发完立即 revoke。
+- **首版会多出一个 `0.0.0-stage` 版本**：staged publishing 机制给新包自动建的占位壳（340 B，说明写着 "Temporary package placeholder for staged publishing"），无害；`dist-tags.latest` 在几分钟内会指到真版本。发布后 `npm view <pkg> versions` 若还没看到自家版本，是 CDN 传播延迟，`npm i --prefer-online` 或等 1 分钟再试。
 
 ## 运行前置
 

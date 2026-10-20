@@ -37,6 +37,34 @@ npm i puppeteer             # 自带 Chromium（约 150MB）
 
 要求 Node ≥ 20。
 
+### 2.2 npm / npx 安装（不 clone 仓库）
+
+包名 `qimao-autopub-mcp`（[npm](https://www.npmjs.com/package/qimao-autopub-mcp)）。**不需要 clone、不需要 build**，MCP 客户端里直接指 `npx`：
+
+```json
+{
+  "mcpServers": {
+    "qimao-autopub": {
+      "command": "npx",
+      "args": ["-y", "qimao-autopub-mcp@latest"]
+    }
+  }
+}
+```
+
+好处是这份配置**换机器 / 换系统都不用改路径**（上面 clone 方式要写死 `dist\index.js` 的绝对路径），升级就是改 `@latest`。命令行试跑（只打印环境自检后退出，不启动传输）：
+
+```powershell
+npx -y qimao-autopub-mcp@latest --selfcheck
+```
+
+> ⚠️ **数据目录（必读）**：npm / npx 安装时包目录在 npm 缓存里（会被清理），所以数据**不会**放进包目录，而是落到用户目录 **`~/.qimao-autopub`**（Windows 即 `C:\Users\<你>\.qimao-autopub`）——cookies、文稿库、截图都在那里。
+>
+> - 想固定在别处（或从旧的 clone 用法迁移过来、继续用旧数据）：在 `env` 里显式指定 `"QIMAO_DATA_DIR": "D:\\qimao-data"`。
+> - 启动日志与 `--selfcheck` 都会打印**实际生效**的数据目录及来源（`env` / `project` / `user`），排障先看这行。
+
+> 📌 **写操作（建书 / 发章 / 发短篇）需要浏览器驱动**：npx 默认会装 optionalDependency `puppeteer-core`，再配合本机 Chrome/Edge 即可（`QIMAO_CHROME_PATH` 可指定路径）。只读工具（列表 / 统计 / 收益）**纯 HTTP**，不需要浏览器。
+
 ## 三、接入 MCP 客户端
 
 在客户端的 MCP 配置里加一个 stdio server，指向 `dist/index.js`：
