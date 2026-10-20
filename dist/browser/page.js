@@ -460,6 +460,58 @@ export async function waitForPublishDialog(page, timeoutMs = 12000) {
     return false;
 }
 /**
+ * 点「立即发布」后判断平台先给哪一层。
+ *
+ * 真机（2026-10）实测：草稿序号与已发布章节接不上时，平台**不会**直接进「立即发布确认」，
+ * 而是先弹 `el-dialog__wrapper.qm-dialog.abnormal-publish-dialog`：
+ *   「检测到章节序号不连续 … 同步更正章节序号：第1章 → 第4章」+『取消』/『更正序号去发布』。
+ * 这层只给两个选择，且**改序号是内容决策**——本工具不替用户点『更正序号去发布』，
+ * 一律如实回报（点名当前章节号 + 弹窗原文 + 可点按钮），由用户改好序号或去页面手动确认。
+ *
+ * ⚠️ 别把 `/draft-publish/` 当「提交接口」拦：弹窗数据来自 `POST book-chapter/draft-publish-confirm`，
+ *    真正提交才是 `POST book-chapter/draft-publish`。
+ */
+export async function waitForPublishGate(page, timeoutMs = 12000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const hit = (await page
+            .evaluate(() => {
+            const vis = (el) => {
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const ds = Array.from(document.querySelectorAll(".el-dialog,.el-message-box,.g-pop,.qm-dialog,.qm-pop")).filter(vis);
+            for (let i = ds.length - 1; i >= 0; i--) {
+                const d = ds[i];
+                const t = (d.innerText || "").replace(/\s+/g, " ").trim();
+                if (/章节序号不连续|序号不连续/.test(t)) {
+                    const options = Array.from(d.querySelectorAll("a,button,.qm-btn,.el-button"));
+                    return {
+                        kind: "sequence",
+                        text: t.slice(0, 300),
+                        options: options
+                            .filter((b) => vis(b))
+                            .map((b) => (b.innerText || "").replace(/\s+/g, " ").trim())
+                            .filter(Boolean)
+                            .slice(0, 6),
+                    };
+                }
+            }
+            for (const d of ds) {
+                const t = (d.innerText || "").replace(/\s+/g, " ").trim();
+                if (/立即发布确认|请核对上下文|确认发布/.test(t))
+                    return { kind: "publish" };
+            }
+            return null;
+        })
+            .catch(() => null));
+        if (hit)
+            return hit;
+        await sleep(300);
+    }
+    return { kind: "none" };
+}
+/**
  * 点掉「确认发布确认」类**多层**弹窗（真机流程，别简化）：
  *
  *   点「立即发布」→ 弹窗①（请核对上下文内容 + 内容声明 + `确认发布`）

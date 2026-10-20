@@ -1,6 +1,6 @@
 import { sleep, shot } from "../browser/driver.js";
 import { API, apiGet, openSession, isError, chapterEditUrl, chapterManageUrl, authorBase } from "../browser/endpoints.js";
-import { realClickText, visibleModalText, visibleToastText, acceptPublishConfirm, waitForText, textOf, fillInput, describeAiDeclaration, } from "../browser/page.js";
+import { realClickText, visibleModalText, visibleToastText, acceptPublishConfirm, waitForPublishGate, waitForText, textOf, fillInput, describeAiDeclaration, } from "../browser/page.js";
 import { logger } from "../core/logger.js";
 import { assertCookies } from "./auth.js";
 import { cleanChapterTitle, countCjk, toPlainText } from "../core/text.js";
@@ -255,6 +255,27 @@ export async function writeChapter(input) {
             }
         };
         page.on("response", onResp);
+        // 硬门：章节名为空时平台对「立即发布」**完全无响应**（连 3 秒 toast 都没有），
+        // 干等只会得到「未出现二次确认弹窗」。提前拦下并说清原因（草稿模式允许无名，故只拦发布 / 定时）。
+        if (mode !== "draft") {
+            const state = await readEditorState(page);
+            if (!String(state.章节名称 ?? "").trim()) {
+                page.off?.("response", onResp);
+                const shotPath = await shot(page, "chapter-title-missing");
+                await browser.close().catch(() => { });
+                return {
+                    ok: false,
+                    action: "aborted",
+                    message: `章节名为空：平台不会响应「${btnCandidates[0]}」（页面上没有任何提示）。` +
+                        `请传 title（≤20 字）后重试；已有章节名请确认查看的是正确的 chapterId。` +
+                        `⚠️ 已填入的正文可能已被编辑器自动保存成草稿，请到章节管理页核对。`,
+                    screenshotPath: shotPath,
+                    filled,
+                    missing,
+                    chapterId: input.chapterId,
+                };
+            }
+        }
         let clicked;
         for (const t of btnCandidates) {
             if (await realClickText(page, t, { exact: true })) {
@@ -283,6 +304,27 @@ export async function writeChapter(input) {
         let confirmed = [];
         let aiDeclaration;
         if (mode === "publish" || mode === "schedule") {
+            // 前置门：序号与已发布章节接不上时，平台先弹「检测到章节序号不连续」，不进发布确认弹窗。
+            // 改序号是内容决策 → 不替用户点「更正序号去发布」，如实回报让用户决定。
+            const gate = await waitForPublishGate(page, 12000);
+            if (gate.kind === "sequence") {
+                const shotPath = await shot(page, "chapter-sequence-blocked");
+                page.off?.("response", onResp);
+                await browser.close().catch(() => { });
+                return {
+                    ok: false,
+                    action: "aborted",
+                    message: `平台拦下：检测到章节序号不连续（本次提交章节号=${input.chapterNumber ?? "未指定"}${input.chapterId ? `, chapterId=${input.chapterId}` : ""}）。` +
+                        `平台弹窗只给两个选择${gate.options?.length ? `：${gate.options.map((o) => `「${o}」`).join(" / ")}` : ""}；` +
+                        `改序号属于内容决策，本工具不替你点「更正序号去发布」。请先确认章节号（编辑器里改序号后重发，或用 update_chapter_qimao 修正），` +
+                        `也可以到页面上手动选择。⚠️ 正文已随编辑器自动保存成草稿（编辑器边输入边存），请到章节管理页核对后再发。` +
+                        `弹窗原文：${gate.text ?? "(未读到)"}。`,
+                    screenshotPath: shotPath,
+                    filled,
+                    missing,
+                    chapterId: input.chapterId,
+                };
+            }
             confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
                 useAI: input.useAI !== false,
                 onAi: (r) => (aiDeclaration = r),

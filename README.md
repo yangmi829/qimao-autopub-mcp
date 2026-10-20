@@ -90,6 +90,8 @@ npm i puppeteer             # 自带 Chromium（约 150MB）
 | `delete_chapter_qimao` | 删除章节（默认预览） |
 | `batch_publish_chapters` | 从本地文稿库批量发章（`confirm=false` 只演练第 1 章；`use_ai` 默认 true） |
 
+发布章节前平台有三个硬门：**章节名非空**、正文 ≥1000 字、**章节序号与已发布章节连续**。缺少章节名时点「立即发布」**毫无反应**（也没有提示），所以工具会先检查章节名；若平台弹「检测到章节序号不连续」，工具**不会**替你点「更正序号去发布」，而是返回 `action=aborted` 并附弹窗原文，由你改好章节号后重发（或用 `update_chapter_qimao` 修）。
+
 ### 短篇
 | 工具 | 说明 |
 | --- | --- |

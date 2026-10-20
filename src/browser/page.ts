@@ -506,6 +506,69 @@ export async function waitForPublishDialog(page: any, timeoutMs = 12000): Promis
   return false;
 }
 
+/** 点「立即发布」之后、发布确认弹窗之前，平台可能先弹的**前置门** */
+export interface PublishGate {
+  /** publish=正常走到「立即发布确认」；sequence=章节序号不连续被拦；none=都没出现 */
+  kind: "publish" | "sequence" | "none";
+  /** 拦截弹窗原文（压空白后截断） */
+  text?: string;
+  /** 弹窗里可点的按钮文案（让调用方原样回报给用户） */
+  options?: string[];
+}
+
+/**
+ * 点「立即发布」后判断平台先给哪一层。
+ *
+ * 真机（2026-10）实测：草稿序号与已发布章节接不上时，平台**不会**直接进「立即发布确认」，
+ * 而是先弹 `el-dialog__wrapper.qm-dialog.abnormal-publish-dialog`：
+ *   「检测到章节序号不连续 … 同步更正章节序号：第1章 → 第4章」+『取消』/『更正序号去发布』。
+ * 这层只给两个选择，且**改序号是内容决策**——本工具不替用户点『更正序号去发布』，
+ * 一律如实回报（点名当前章节号 + 弹窗原文 + 可点按钮），由用户改好序号或去页面手动确认。
+ *
+ * ⚠️ 别把 `/draft-publish/` 当「提交接口」拦：弹窗数据来自 `POST book-chapter/draft-publish-confirm`，
+ *    真正提交才是 `POST book-chapter/draft-publish`。
+ */
+export async function waitForPublishGate(page: any, timeoutMs = 12000): Promise<PublishGate> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const hit = (await page
+      .evaluate(() => {
+        const vis = (el: any) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        };
+        const ds = (
+          Array.from(document.querySelectorAll(".el-dialog,.el-message-box,.g-pop,.qm-dialog,.qm-pop")) as any[]
+        ).filter(vis);
+        for (let i = ds.length - 1; i >= 0; i--) {
+          const d: any = ds[i];
+          const t = (d.innerText || "").replace(/\s+/g, " ").trim();
+          if (/章节序号不连续|序号不连续/.test(t)) {
+            const options = Array.from(d.querySelectorAll("a,button,.qm-btn,.el-button")) as any[];
+            return {
+              kind: "sequence",
+              text: t.slice(0, 300),
+              options: options
+                .filter((b: any) => vis(b))
+                .map((b: any) => (b.innerText || "").replace(/\s+/g, " ").trim())
+                .filter(Boolean)
+                .slice(0, 6),
+            };
+          }
+        }
+        for (const d of ds as any[]) {
+          const t = (d.innerText || "").replace(/\s+/g, " ").trim();
+          if (/立即发布确认|请核对上下文|确认发布/.test(t)) return { kind: "publish" };
+        }
+        return null;
+      })
+      .catch(() => null)) as PublishGate | null;
+    if (hit) return hit;
+    await sleep(300);
+  }
+  return { kind: "none" };
+}
+
 /**
  * 点掉「确认发布确认」类**多层**弹窗（真机流程，别简化）：
  *
