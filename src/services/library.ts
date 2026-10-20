@@ -264,6 +264,8 @@ export interface BatchPublishOptions {
   articleIds?: string[];
   limit?: number;
   intervalSeconds?: number;
+  /** 发布确认弹窗的「内容声明」：默认 true＝含AI生成内容；false 才选本人原创 */
+  useAI?: boolean;
   confirm?: boolean;
   headless?: boolean;
 }
@@ -339,6 +341,7 @@ export async function batchPublishChapters(opts: BatchPublishOptions): Promise<B
       title: a.title,
       content: a.content,
       chapterNumber: a.chapterNumber,
+      useAI: opts.useAI,
       confirm: opts.confirm,
       headless: opts.headless,
     });

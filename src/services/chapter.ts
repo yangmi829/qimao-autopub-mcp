@@ -1,6 +1,17 @@
 import { sleep, shot } from "../browser/driver.js";
 import { API, apiGet, openSession, isError, chapterEditUrl, chapterManageUrl, authorBase } from "../browser/endpoints.js";
-import { realClickText, realClickByJs, visibleModalText, visibleToastText, acceptPublishConfirm, waitForText, textOf, fillInput } from "../browser/page.js";
+import {
+  realClickText,
+  realClickByJs,
+  visibleModalText,
+  visibleToastText,
+  acceptPublishConfirm,
+  waitForText,
+  textOf,
+  fillInput,
+  describeAiDeclaration,
+  type AiDeclarationOutcome,
+} from "../browser/page.js";
 import { logger } from "../core/logger.js";
 import { assertCookies } from "./auth.js";
 import { cleanChapterTitle, countCjk, toPlainText } from "../core/text.js";
@@ -165,6 +176,11 @@ export interface WriteChapterInput {
   mode?: "publish" | "draft" | "schedule";
   /** 定时发布时间（yyyy-MM-dd HH:mm）——仅 mode=schedule 支持 */
   scheduledTime?: string;
+  /**
+   * 发布确认弹窗里的「内容声明」：**默认 true＝选「含AI生成内容」**（AI 相关声明一律取肯定项）；
+   * 显式 false 才选「本人原创」。平台没有该字段时（短篇 / 部分渠道）自动跳过。
+   */
+  useAI?: boolean;
   confirm?: boolean;
   headless?: boolean;
 }
@@ -338,9 +354,14 @@ export async function writeChapter(input: WriteChapterInput): Promise<WriteChapt
     // ★ 二次确认弹窗（真机确认是**两层**）：点「立即发布」→ 弹窗①「请核对上下文内容」+确认发布
     //   → 点确认发布 → 弹层②「重要提醒」+『我已阅读并知晓』→ 再点确认发布 → 才真正发布。
     //   只做一层会「点了但章节还是草稿」——这是本工具最初踩的坑。
+    //   「内容声明」就在这一层：默认选「含AI生成内容」（use_ai=false 才选「本人原创」）。
     let confirmed: string[] = [];
+    let aiDeclaration: AiDeclarationOutcome | undefined;
     if (mode === "publish" || mode === "schedule") {
-      confirmed = await acceptPublishConfirm(page, 4, () => publishDone);
+      confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
+        useAI: input.useAI !== false,
+        onAi: (r) => (aiDeclaration = r),
+      });
     }
 
     if (mode === "schedule" && input.scheduledTime) {
@@ -363,6 +384,7 @@ export async function writeChapter(input: WriteChapterInput): Promise<WriteChapt
     if (!input.chapterId && cidFromUrl) notes.push(`平台已自动建草稿 chapterId=${cidFromUrl}（不传 chapter_id 打开编辑器就会这样）`);
     if (confirmed.length) notes.push(`已点确认链：${confirmed.map((x) => `「${x}」`).join("→")}`);
     else if (mode === "publish") notes.push("⚠️ 未出现二次确认弹窗（可能按钮未生效）");
+    if (aiDeclaration) notes.push(`内容声明：${describeAiDeclaration(aiDeclaration)}`);
     if (missing.length) notes.push(`未命中/警告：${missing.join("/")}`);
     if (toast) notes.push(`提示：${toast}`);
     if (apiTrace.length) notes.push(`写接口：${apiTrace.slice(-2).join(" ｜ ")}`);
@@ -396,6 +418,8 @@ export async function uploadChapter(input: {
   chapterNumber?: number;
   mode?: "publish" | "draft" | "schedule";
   scheduledTime?: string;
+  /** 发布确认弹窗的「内容声明」：默认 true＝含AI生成内容 */
+  useAI?: boolean;
   confirm?: boolean;
   headless?: boolean;
 }): Promise<WriteChapterResult> {
@@ -407,6 +431,7 @@ export async function uploadChapter(input: {
     content: input.content,
     mode: input.mode,
     scheduledTime: input.scheduledTime,
+    useAI: input.useAI,
     confirm: input.confirm,
     headless: input.headless,
   });

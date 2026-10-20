@@ -44,6 +44,7 @@ export function registerChapterTools(server) {
             article_id: z.string().optional().describe("本地文稿库 article_id（优先于 file_path/content）"),
             mode: z.enum(["publish", "draft", "schedule"]).optional().describe("提交方式：publish=立即发布（默认），draft=更新草稿，schedule=定时发布"),
             scheduled_time: z.string().optional().describe("定时发布时间（yyyy-MM-dd HH:mm 或 ISO 字符串），仅 mode=schedule"),
+            use_ai: z.boolean().optional().describe("「内容声明」是否选 AI 肯定项：**默认 true＝含AI生成内容**（平台若有「是/AI生成」等同义项也取肯定项）；显式 false 才选「本人原创」。页面没有该字段时自动跳过"),
             confirm: z.boolean().optional().describe("是否真正发布，默认 false"),
             headless: z.boolean().optional().describe("是否无头运行，默认 true"),
         },
@@ -72,6 +73,7 @@ export function registerChapterTools(server) {
             chapterNumber: args.chapter_number === undefined || args.chapter_number === "" ? undefined : Number(args.chapter_number),
             mode: args.mode,
             scheduledTime: args.scheduled_time,
+            useAI: args.use_ai,
             confirm: args.confirm,
             headless: args.headless,
         });
@@ -101,6 +103,7 @@ export function registerChapterTools(server) {
             article_id: z.string().optional().describe("本地文稿库 article_id（优先）"),
             mode: z.enum(["publish", "draft", "schedule"]).optional().describe("提交方式：publish=立即发布（默认），draft=更新草稿"),
             scheduled_time: z.string().optional().describe("定时发布时间（可选）"),
+            use_ai: z.boolean().optional().describe("「内容声明」是否选 AI 肯定项：**默认 true＝含AI生成内容**；显式 false 才选「本人原创」"),
             confirm: z.boolean().optional().describe("是否真正提交修改，默认 false（只读预览）"),
             headless: z.boolean().optional().describe("是否无头运行，默认 true"),
         },
@@ -130,6 +133,7 @@ export function registerChapterTools(server) {
             chapterNumber: args.chapter_number === undefined || args.chapter_number === "" ? undefined : Number(args.chapter_number),
             mode: args.mode,
             scheduledTime: args.scheduled_time,
+            useAI: args.use_ai,
             confirm: args.confirm,
             headless: args.headless,
         });
@@ -167,6 +171,7 @@ export function registerChapterTools(server) {
             article_ids: z.array(z.string()).optional().describe("指定要上传的 article_id 列表（缺省＝该小说下所有待发布章节）"),
             limit: z.number().int().positive().optional().describe("最多上传多少章"),
             interval_seconds: z.number().min(0).optional().describe("每章之间间隔秒数，默认 5"),
+            use_ai: z.boolean().optional().describe("「内容声明」是否选 AI 肯定项：**默认 true＝含AI生成内容**；显式 false 才选「本人原创」"),
             confirm: z.boolean().optional().describe("是否真正发布，默认 false"),
             headless: z.boolean().optional().describe("是否无头运行，默认 true"),
         },
@@ -176,6 +181,7 @@ export function registerChapterTools(server) {
         articleIds: args.article_ids,
         limit: args.limit,
         intervalSeconds: args.interval_seconds,
+        useAI: args.use_ai,
         confirm: args.confirm,
         headless: args.headless,
     }))));

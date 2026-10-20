@@ -253,6 +253,7 @@ export async function batchPublishChapters(opts) {
             title: a.title,
             content: a.content,
             chapterNumber: a.chapterNumber,
+            useAI: opts.useAI,
             confirm: opts.confirm,
             headless: opts.headless,
         });

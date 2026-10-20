@@ -96,6 +96,7 @@ export function registerShortStoryTools(server) {
             file_path: z.string().optional(),
             article_id: z.string().optional(),
             mode: z.enum(["publish", "draft"]).optional().describe("publish＝立即发布（默认，需 ≥4000 字），draft＝存为草稿"),
+            use_ai: z.boolean().optional().describe("「内容声明」是否选 AI 肯定项：**默认 true＝含AI生成内容 / 是**（有 AI 字眼的选项一律取肯定项）；显式 false 才选「本人原创 / 否」。短篇页没有该字段时自动跳过"),
             category: z.string().optional().describe("一级分类名称（新建时用）"),
             category_sub: z.string().optional().describe("二级分类名称（新建时用）"),
             tags: z.array(z.string()).optional().describe("标签名称，按分组顺序取用（新建时用）"),
@@ -128,6 +129,7 @@ export function registerShortStoryTools(server) {
             clientId: args.client_id,
             abstract: args.abstract,
             protagonist1: args.protagonist1,
+            useAI: args.use_ai,
             confirm: args.confirm,
             headless: args.headless,
         });

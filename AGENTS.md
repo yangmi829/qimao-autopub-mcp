@@ -61,6 +61,7 @@
 - **建书** `services/book.ts:createBook`：入口是列表页「新建小说」→ **「选择首发站点」弹窗**（`client_id`：1=七猫中文网 / 3=纵横中文网）→ `POST book/save-book-info` 返回 `book_id`。必填门（前端 `submitBtnDisabled`）：书名 && 目标读者 && 一级分类 && 二级分类 && 简介 && ≥1 标签 && ≥1 主角名。书名走 `core/text.ts:cleanBookTitle` 白名单清洗（全角括号等会被平台拒 → 按钮永远灰着）。
 - **改作品信息 / 标签** `services/book.ts:updateBookInfo`：`bookInfoUrl()` = `/front/book-manage/information?id=…`（**`?id=`，不是 `?book_id=`**）。分类 / 标签落地在 `fillBookInfoFields`（建书 / 改信息 / 短篇共用同一份），`set_book_tags` 不再空操作。
 - **章节** `services/chapter.ts:writeChapter`：`chapterEditUrl()` = `/front/book-upload?id=<bookId>`（改章附加 `&cid=<chapterId>`）。编辑器**没有 `.el-form-item`**（不是表单结构），只能按结构定位：序号 `input.el-input__inner[maxlength=5]`、章节名 `textarea[placeholder*=章节名称]`、正文 `div.q-contenteditable.book`。提交：`mode=publish`「立即发布」（≥1000 字）→ `draft-publish-confirm` 弹窗「确认发布」→「重要提醒」里点「我已阅读并知晓」→ 再「确认发布」→ `POST /api/pc/v2/book-chapter/draft-publish`；`mode=draft`「更新草稿 / 存为草稿」。**只点一层会「看起来成功但仍是草稿」**。
+- **内容声明（AI）**：发布确认弹窗 `el-dialog.qm-pop` 里的「内容声明」下拉（`/api/author/global-data` → `disclaimer_type`：`本人原创`=1 / `含AI生成内容`=2，`formData.disclaimer_type` 默认 `"0"`＝未选）。`browser/page.ts:applyAiDeclaration()` 在点「确认发布」前**默认选「含AI生成内容」**（`use_ai=false` 才选「本人原创」），由 `acceptPublishConfirm(..., { useAI, onAi })` 调用；没有该字段（短篇）自动跳过。改文案只改 `AI_DECLARATION_YES/NO` 两个数组。
 - **短篇** `services/shortStory.ts`：见下节（与长篇差异最大）。
 - **删除**：短篇走**按书名定位行**（行内没有 `book_id`，`编辑正文` 的 href 是 `javascript:void(0)`）→ 行内「删除」→ 弹「作品删除提示」→ 点 **「永久删除」**（带 2s 倒计时，倒计时内点击无效）→ `POST /api/pc/v1/book/del-book`。
 

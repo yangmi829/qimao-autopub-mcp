@@ -10,7 +10,18 @@ import {
   SHORT_CLIENT_ID,
 } from "../browser/endpoints.js";
 import { readForm } from "../browser/form.js";
-import { realClickText, realClickByJs, fillInput, visibleModalText, visibleToastText, acceptPublishConfirm, clickAgreementIfPresent, waitForText } from "../browser/page.js";
+import {
+  realClickText,
+  realClickByJs,
+  fillInput,
+  visibleModalText,
+  visibleToastText,
+  acceptPublishConfirm,
+  clickAgreementIfPresent,
+  waitForText,
+  describeAiDeclaration,
+  type AiDeclarationOutcome,
+} from "../browser/page.js";
 import { logger } from "../core/logger.js";
 import { countCjk, toPlainText, cleanBookTitle } from "../core/text.js";
 import { assertCookies } from "./auth.js";
@@ -144,6 +155,11 @@ export interface WriteShortInput {
   clientId?: string;
   /** 提交方式：publish＝立即发布（默认，需 ≥4000 字），draft＝存为草稿 */
   mode?: "publish" | "draft";
+  /**
+   * 发布确认弹窗里的「内容声明」：**默认 true＝选 AI 肯定项（含AI生成内容 / 是）**；
+   * 显式 false 才选否定项（本人原创 / 否）。短篇页目前没有该字段时自动跳过。
+   */
+  useAI?: boolean;
   confirm?: boolean;
   headless?: boolean;
 }
@@ -484,6 +500,7 @@ export async function publishShortStory(input: WriteShortInput): Promise<WriteSh
     let confirmed: string[] = [];
     let blockedText = "";
     let drafted = false;
+    let aiDeclaration: AiDeclarationOutcome | undefined;
 
     for (let attempt = 0; attempt < 3; attempt++) {
       if (publishDone || drafted) break;
@@ -527,9 +544,13 @@ export async function publishShortStory(input: WriteShortInput): Promise<WriteSh
         break;
       }
 
-      // ④ 确认链：publish 两层确认；draft 先点掉「重要提醒」
+      // ④ 确认链：publish 两层确认；draft 先点掉「重要提醒」。
+      //    确认前先处理「内容声明」：有 AI 选项默认选肯定项（use_ai=false 才选本人原创）。
       if (mode === "publish") {
-        confirmed = await acceptPublishConfirm(page, 4, () => publishDone);
+        confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
+          useAI: input.useAI !== false,
+          onAi: (r) => (aiDeclaration = r),
+        });
         if (confirmed.length === 0 && /重复内容|重复率/.test(await visibleModalText(page))) {
           blockedText = (await visibleModalText(page)).replace(/\s+/g, " ").slice(0, 240);
         }
@@ -592,6 +613,7 @@ export async function publishShortStory(input: WriteShortInput): Promise<WriteSh
     if (splitSteps.length) finalNotes.push(`智能分章：${splitSteps.join("→")}`);
     if (confirmed.length) finalNotes.push(`已点确认链：${confirmed.map((x) => `「${x}」`).join("→")}`);
     else if (mode === "publish" && !blockedText) finalNotes.push("⚠️ 未出现二次确认弹窗（可能按钮未生效）");
+    if (aiDeclaration) finalNotes.push(`内容声明：${describeAiDeclaration(aiDeclaration)}`);
     if (blockedText) finalNotes.push(`⛔ 平台拦下：${blockedText}`);
     if (missing.length) finalNotes.push(`未命中/警告：${missing.join("/")}`);
     if (toast) finalNotes.push(`页面提示：${toast}`);

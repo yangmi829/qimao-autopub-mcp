@@ -85,17 +85,17 @@ npm i puppeteer             # 自带 Chromium（约 150MB）
 | 工具 | 说明 |
 | --- | --- |
 | `list_chapters_qimao` | 章节列表（顺带返回卷列表） |
-| `add_chapter_qimao` | 新增章节（正文可用 `content` / `file_path` / `article_id`；支持定时） |
-| `update_chapter_qimao` | 修改章节 |
+| `add_chapter_qimao` | 新增章节（正文可用 `content` / `file_path` / `article_id`；支持定时；`use_ai` **默认 true＝内容声明选「含AI生成内容」**） |
+| `update_chapter_qimao` | 修改章节（同样支持 `use_ai`） |
 | `delete_chapter_qimao` | 删除章节（默认预览） |
-| `batch_publish_chapters` | 从本地文稿库批量发章（`confirm=false` 只演练第 1 章） |
+| `batch_publish_chapters` | 从本地文稿库批量发章（`confirm=false` 只演练第 1 章；`use_ai` 默认 true） |
 
 ### 短篇
 | 工具 | 说明 |
 | --- | --- |
 | `list_short_stories_qimao` / `get_short_story_qimao` | 短篇列表 / 详情 |
 | `create_short_story_qimao` | 新建短篇壳（名称 / 目标读者 / 分类 / 标签 / 主角名 / 简介；默认只预览） |
-| `publish_short_story_qimao` | 发正文（`mode=publish` 立即发布 / `mode=draft` 存草稿） |
+| `publish_short_story_qimao` | 发正文（`mode=publish` 立即发布 / `mode=draft` 存草稿；`use_ai` 默认 true） |
 | `delete_short_story_qimao` | 删除短篇 / 草稿（默认预览；按书名定位该行再删） |
 
 短篇与长篇的差异（已在真机上确认）：
@@ -104,6 +104,14 @@ npm i puppeteer             # 自带 Chromium（约 150MB）
 - **短篇没有独立的章节名**：正文编辑器里标题＝作品名，正文内小标题靠工具栏把「正文」切成「标题」样式。
 - **正文字数门 4000–70000 字**（来自 `/api/pc/v1/global/config` 的 `client_config[5].word_count`，与页面文案一致）。
 - **发布要过三步**：①「立即发布」→ 弹「章节格式不满足发布要求，是否智能分章？」→「开始拆分」；②「智能分章结果」→「保存分章结果」；③ 再「立即发布」→ 平台查重（重复率高会直接拦下）→ 两层确认。`mode=draft` 只需「存为草稿」。
+
+### AI / 创作声明默认取肯定项
+
+七猫长篇的发布确认弹窗里有「内容声明」下拉（平台配置：`本人原创` / `含AI生成内容`），代码默认值是 `0`＝**未选**。本服务在点「确认发布」之前会自动处理：
+
+- **默认 `use_ai=true` → 选「含AI生成内容」**（平台若改文案，`是 / AI生成 / AI辅助创作 / 人工智能生成` 等同义肯定项都能命中）；
+- 只有显式传 `use_ai=false` 才选「本人原创 / 否」；
+- 页面没有该字段（例如短篇）时自动跳过，并在返回消息里写明 `内容声明：本页无…字段，跳过`，不当作失败。
 
 ### 数据 / 收益（只读 HTTP）
 | 工具 | 说明 |

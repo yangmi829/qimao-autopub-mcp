@@ -1,6 +1,6 @@
 import { sleep, shot } from "../browser/driver.js";
 import { API, apiGet, openSession, isError, chapterEditUrl, chapterManageUrl, authorBase } from "../browser/endpoints.js";
-import { realClickText, visibleModalText, visibleToastText, acceptPublishConfirm, waitForText, textOf, fillInput } from "../browser/page.js";
+import { realClickText, visibleModalText, visibleToastText, acceptPublishConfirm, waitForText, textOf, fillInput, describeAiDeclaration, } from "../browser/page.js";
 import { logger } from "../core/logger.js";
 import { assertCookies } from "./auth.js";
 import { cleanChapterTitle, countCjk, toPlainText } from "../core/text.js";
@@ -279,9 +279,14 @@ export async function writeChapter(input) {
         // ★ 二次确认弹窗（真机确认是**两层**）：点「立即发布」→ 弹窗①「请核对上下文内容」+确认发布
         //   → 点确认发布 → 弹层②「重要提醒」+『我已阅读并知晓』→ 再点确认发布 → 才真正发布。
         //   只做一层会「点了但章节还是草稿」——这是本工具最初踩的坑。
+        //   「内容声明」就在这一层：默认选「含AI生成内容」（use_ai=false 才选「本人原创」）。
         let confirmed = [];
+        let aiDeclaration;
         if (mode === "publish" || mode === "schedule") {
-            confirmed = await acceptPublishConfirm(page, 4, () => publishDone);
+            confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
+                useAI: input.useAI !== false,
+                onAi: (r) => (aiDeclaration = r),
+            });
         }
         if (mode === "schedule" && input.scheduledTime) {
             // 定时发布的时间选择器结构未联调：尽力而为，失败就如实回报（让用户手动确认时间）
@@ -304,6 +309,8 @@ export async function writeChapter(input) {
             notes.push(`已点确认链：${confirmed.map((x) => `「${x}」`).join("→")}`);
         else if (mode === "publish")
             notes.push("⚠️ 未出现二次确认弹窗（可能按钮未生效）");
+        if (aiDeclaration)
+            notes.push(`内容声明：${describeAiDeclaration(aiDeclaration)}`);
         if (missing.length)
             notes.push(`未命中/警告：${missing.join("/")}`);
         if (toast)
@@ -341,6 +348,7 @@ export async function uploadChapter(input) {
         content: input.content,
         mode: input.mode,
         scheduledTime: input.scheduledTime,
+        useAI: input.useAI,
         confirm: input.confirm,
         headless: input.headless,
     });

@@ -1,7 +1,7 @@
 import { sleep, shot } from "../browser/driver.js";
 import { API, apiGet, openSession, isError, authorBase, shortManageUrl, shortChapterEditUrl, SHORT_CLIENT_ID, } from "../browser/endpoints.js";
 import { readForm } from "../browser/form.js";
-import { realClickText, realClickByJs, fillInput, visibleModalText, visibleToastText, acceptPublishConfirm, clickAgreementIfPresent, waitForText } from "../browser/page.js";
+import { realClickText, realClickByJs, fillInput, visibleModalText, visibleToastText, acceptPublishConfirm, clickAgreementIfPresent, waitForText, describeAiDeclaration, } from "../browser/page.js";
 import { logger } from "../core/logger.js";
 import { countCjk, toPlainText, cleanBookTitle } from "../core/text.js";
 import { assertCookies } from "./auth.js";
@@ -408,6 +408,7 @@ export async function publishShortStory(input) {
         let confirmed = [];
         let blockedText = "";
         let drafted = false;
+        let aiDeclaration;
         for (let attempt = 0; attempt < 3; attempt++) {
             if (publishDone || drafted)
                 break;
@@ -447,9 +448,13 @@ export async function publishShortStory(input) {
                 blockedText = modalNow.replace(/\s+/g, " ").slice(0, 240);
                 break;
             }
-            // ④ 确认链：publish 两层确认；draft 先点掉「重要提醒」
+            // ④ 确认链：publish 两层确认；draft 先点掉「重要提醒」。
+            //    确认前先处理「内容声明」：有 AI 选项默认选肯定项（use_ai=false 才选本人原创）。
             if (mode === "publish") {
-                confirmed = await acceptPublishConfirm(page, 4, () => publishDone);
+                confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
+                    useAI: input.useAI !== false,
+                    onAi: (r) => (aiDeclaration = r),
+                });
                 if (confirmed.length === 0 && /重复内容|重复率/.test(await visibleModalText(page))) {
                     blockedText = (await visibleModalText(page)).replace(/\s+/g, " ").slice(0, 240);
                 }
@@ -515,6 +520,8 @@ export async function publishShortStory(input) {
             finalNotes.push(`已点确认链：${confirmed.map((x) => `「${x}」`).join("→")}`);
         else if (mode === "publish" && !blockedText)
             finalNotes.push("⚠️ 未出现二次确认弹窗（可能按钮未生效）");
+        if (aiDeclaration)
+            finalNotes.push(`内容声明：${describeAiDeclaration(aiDeclaration)}`);
         if (blockedText)
             finalNotes.push(`⛔ 平台拦下：${blockedText}`);
         if (missing.length)
