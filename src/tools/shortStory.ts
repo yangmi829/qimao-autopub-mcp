@@ -26,6 +26,26 @@ async function pickContent(args: { content?: string; file_path?: string; article
   return "";
 }
 
+/**
+ * create 阶段专用取正文：create **不写入正文**，content 只用于字数提示，
+ * 所以 article_id 查不到时降级为 warning，不阻断建篇（2026-10-20 跨库 id 事故）。
+ * 若同时给了 content / file_path，照常回退使用。
+ * ⚠️ publish 路径不能降级——content 为空会跳过填充、直接发草稿里的正文。
+ */
+async function pickCreateContent(args: { content?: string; file_path?: string; article_id?: string }): Promise<{
+  content: string;
+  warning?: string;
+  articleFound: boolean;
+}> {
+  if (!args.article_id) return { content: await pickContent(args), articleFound: false };
+  const art = await articles.get(args.article_id);
+  if (art) return { content: art.content, articleFound: true };
+  const warning = `${missingArticleMessage(args.article_id)}；create 不写入正文，已忽略该参数（正文请在 publish_short_story_qimao 时提供）`;
+  if (args.content) return { content: args.content, warning, articleFound: false };
+  if (args.file_path) return { content: resolveContent(undefined, args.file_path).text, warning, articleFound: false };
+  return { content: "", warning, articleFound: false };
+}
+
 export function registerShortStoryTools(server: McpServer): void {
   server.registerTool(
     "list_short_stories_qimao",
@@ -68,7 +88,7 @@ export function registerShortStoryTools(server: McpServer): void {
         gender: z.number().optional().describe("目标读者：1=男生为主（默认），0=女生为主"),
         content: z.string().optional().describe("正文（仅用于字数提示；本工具不写正文）"),
         file_path: z.string().optional().describe("正文文件路径（仅用于字数提示）"),
-        article_id: z.string().optional().describe("本地文稿库 article_id（仅用于字数提示）"),
+        article_id: z.string().optional().describe("本地文稿库 article_id（仅用于字数提示；**只在七猫库内有效**，查不到会降级为 warning）"),
         category: z.string().optional().describe("一级分类名称（**未匹配即中止**，不再静默取第一个；先用 list_book_options_qimao(client_id=\"5\") 查）"),
         category_sub: z.string().optional().describe("二级分类名称（同上：未匹配即中止）"),
         tags: z.array(z.string()).optional().describe("标签名称，按分组顺序取用；缺省时每个分组各取第一个"),
@@ -80,15 +100,15 @@ export function registerShortStoryTools(server: McpServer): void {
       },
     },
     async (args) => {
-      let content = "";
+      let picked: { content: string; warning?: string; articleFound: boolean };
       try {
-        content = await pickContent(args);
+        picked = await pickCreateContent(args);
       } catch (e) {
         return fail((e as Error).message);
       }
       const r = await createShortStory({
         title: args.title,
-        content,
+        content: picked.content,
         category: args.category,
         categorySub: args.category_sub,
         tags: args.tags,
@@ -99,7 +119,8 @@ export function registerShortStoryTools(server: McpServer): void {
         confirm: args.confirm,
         headless: args.headless,
       });
-      if (args.article_id && r.ok && r.action !== "error") {
+      if (picked.warning) r.warnings = [picked.warning, ...(r.warnings ?? [])];
+      if (args.article_id && picked.articleFound && r.ok && r.action !== "error") {
         await articles.update(args.article_id, { lastMessage: r.message, updatedAt: nowIso() });
       }
       return fromService(r as any);
