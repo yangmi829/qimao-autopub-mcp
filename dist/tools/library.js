@@ -33,9 +33,9 @@ export function registerLibraryTools(server) {
         title: "列出本地文稿",
         description: "按 kind / novel_id / status 过滤列出本地文稿库条目（不含正文全文）。",
         inputSchema: {
-            kind: z.enum(["chapter", "short"]).optional(),
-            novel_id: z.string().optional(),
-            status: z.enum(["draft", "published", "failed"]).optional(),
+            kind: z.enum(["chapter", "short"]).optional().describe("chapter=小说章节，short=短篇正文"),
+            novel_id: z.string().optional().describe("按归属的本地小说 id 过滤"),
+            status: z.enum(["draft", "published", "failed"]).optional().describe("按状态过滤：draft/published/failed"),
         },
     }, async (args) => {
         const items = await listArticles({ kind: args.kind, novelId: args.novel_id, status: args.status });

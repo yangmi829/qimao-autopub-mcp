@@ -30,7 +30,7 @@ export function registerResources(server) {
         });
     });
     server.registerResource("tasks", "qimao://tasks", { title: "发布任务日志", description: "批量/单章上传的任务日志", mimeType: MIME }, async (uri) => json(uri, { total: (await tasks.all()).length, tasks: await tasks.all() }));
-    server.registerResource("publish-rules", "qimao://publish-rules", { title: "发布限制须知", description: "短篇字数区间、定时发布支持范围、只读/写能力边界等", mimeType: MIME }, async (uri) => json(uri, {
+    server.registerResource("publish-rules", "qimao://publish-rules", { title: "发布限制须知", description: "短篇字数区间、定时发布支持范围、只读/写能力边界等；写操作前先读", mimeType: MIME }, async (uri) => json(uri, {
         readWriteBoundary: {
             readonly: "作品列表 / 章节列表 / 卷列表 / 短篇列表与详情 / 数据统计 / 收益 均走纯 HTTP（签名可复现），不需要浏览器。",
             write: "建书 / 改作品信息 / 标签 / 章节增删改与批量 / 短篇新建发布删除 均驱动真实页面，需要浏览器（puppeteer-core + 本机 Chrome/Edge）。",
@@ -55,6 +55,6 @@ export function registerResources(server) {
             income: incomeManageUrl(),
         },
     }));
-    server.registerResource("genres", "qimao://genres", { title: "网文赛道知识库", description: "主流赛道的爽点机制、开篇要求、节奏、避坑清单与建议单章字数（不联网）", mimeType: MIME }, async (uri) => json(uri, GENRES));
-    server.registerResource("golden-three-chapters", "qimao://golden-three-chapters", { title: "黄金三章方法论", description: "前三章逐章目标与通用节奏要求（markdown）", mimeType: "text/markdown" }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: renderGoldenThree() }] }));
+    server.registerResource("genres", "qimao://genres", { title: "网文赛道知识库", description: "主流赛道的爽点机制、开篇要求、节奏、避坑清单与建议单章字数（不联网）；定赛道 / 写开篇前先读", mimeType: MIME }, async (uri) => json(uri, GENRES));
+    server.registerResource("golden-three-chapters", "qimao://golden-three-chapters", { title: "黄金三章方法论", description: "前三章逐章目标与通用节奏要求（markdown）；写前三章前先读", mimeType: "text/markdown" }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: renderGoldenThree() }] }));
 }

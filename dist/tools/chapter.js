@@ -91,7 +91,7 @@ export function registerChapterTools(server) {
     server.registerTool("update_chapter_qimao", {
         title: "修改章节",
         description: "改已有章节的标题 / 正文（走章节编辑器 `/front/book-upload?id=…&cid=…`，按 chapter_id 定位）。正文可用 content / file_path / article_id。" +
-            "mode=publish（默认）| draft（只更新草稿）。\n" +
+            "mode=publish（默认）| draft（只更新草稿）| schedule（定时发布，配 scheduled_time；时间选择器未联调，失败会如实回报）。\n" +
             "⚠️ 该编辑器边输入边自动保存，所以**默认 confirm=false 只打开页面读现状 + 截图，完全不输入**；confirm=true 才填入并提交。",
         inputSchema: {
             book_id: z.string().describe("七猫书 ID（book_id）"),
@@ -101,8 +101,8 @@ export function registerChapterTools(server) {
             content: z.string().optional().describe("修改后的正文（与 file_path/article_id 三选一）"),
             file_path: z.string().optional().describe("正文所在文件路径（UTF-8 文本）"),
             article_id: z.string().optional().describe("本地文稿库 article_id（优先）"),
-            mode: z.enum(["publish", "draft", "schedule"]).optional().describe("提交方式：publish=立即发布（默认），draft=更新草稿"),
-            scheduled_time: z.string().optional().describe("定时发布时间（可选）"),
+            mode: z.enum(["publish", "draft", "schedule"]).optional().describe("提交方式：publish=立即发布（默认），draft=更新草稿，schedule=定时发布（配 scheduled_time）"),
+            scheduled_time: z.string().optional().describe("定时发布时间（yyyy-MM-dd HH:mm 或 ISO 字符串，仅 mode=schedule）"),
             use_ai: z.boolean().optional().describe("「内容声明」是否选 AI 肯定项：**默认 true＝含AI生成内容**；显式 false 才选「本人原创」"),
             confirm: z.boolean().optional().describe("是否真正提交修改，默认 false（只读预览）"),
             headless: z.boolean().optional().describe("是否无头运行，默认 true"),
