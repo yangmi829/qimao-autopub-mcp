@@ -4,7 +4,7 @@ import { sleep, shot } from "../browser/driver.js";
 import { API, apiGet, openSession, isError, bookManageUrl, createBookUrl, bookInfoUrl, shortStoryInfoUrl, SHORT_CLIENT_ID, authorBase } from "../browser/endpoints.js";
 import { fillByLabel, readForm } from "../browser/form.js";
 import { realClickText, realClickByJs, realTypeByJs, clickVisibleOption, visibleSelectOptions, visibleModalText, } from "../browser/page.js";
-import { assertCookies } from "./auth.js";
+import { assertCookies, assertWriteReady } from "./auth.js";
 import { cleanBookTitle } from "../core/text.js";
 /** 容错取值：在不同命名（后端字段名未公开）中取第一个命中的 */
 function pick(obj, keys) {
@@ -308,7 +308,7 @@ export async function resolveClientName(clientId) {
  * 未显式传入的会填默认值并在 `filled` 里标注 `(默认)`，避免「按钮一直灰着」的迷惑失败。
  */
 export async function createBook(input) {
-    assertCookies();
+    assertWriteReady();
     const session = await openSession(input.headless ?? true, "/front/book-manage");
     if (isError(session))
         return { ok: false, action: "error", message: session.error };
@@ -559,7 +559,7 @@ async function clickInfoSaveButton(page, candidates) {
  * ⚠️ 「保存」按钮的真实文案（`确认创建` / `保存` / `立即修改`）尚未真机联调，见下方候选。
  */
 export async function updateBookInfo(input) {
-    assertCookies();
+    assertWriteReady();
     const short = await isShortBook(input.bookId);
     const path = short ? shortStoryInfoUrl(input.bookId) : bookInfoUrl(input.bookId);
     const pageName = short ? "短篇信息页" : "作品信息页";

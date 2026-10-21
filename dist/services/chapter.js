@@ -3,7 +3,7 @@ import { NEXT_STEP_CHAPTER_PUBLISHED } from "../core/reminders.js";
 import { API, apiGet, openSession, isError, chapterEditUrl, chapterManageUrl, authorBase } from "../browser/endpoints.js";
 import { realClickText, visibleModalText, visibleToastText, acceptPublishConfirm, waitForPublishGate, waitForText, textOf, fillInput, describeAiDeclaration, } from "../browser/page.js";
 import { logger } from "../core/logger.js";
-import { assertCookies } from "./auth.js";
+import { assertCookies, assertWriteReady } from "./auth.js";
 import { cleanChapterTitle, countCjk, toPlainText } from "../core/text.js";
 /**
  * 章节编辑器选择器（2026-10 真机确认）。
@@ -152,7 +152,7 @@ export async function readEditorState(page) {
  *    —— 一输入就可能改动线上正文。`confirm=true` 才填入并提交。
  */
 export async function writeChapter(input) {
-    assertCookies();
+    assertWriteReady();
     const target = chapterEditUrl(input.bookId, input.chapterId);
     const session = await openSession(input.headless ?? true, target);
     if (isError(session))
@@ -404,7 +404,7 @@ export async function uploadChapter(input) {
  * 打开 `/front/book-upload?id=…`（不带 cid）平台会**自动新建一条草稿**，等于没删还多一条。
  * 真实删除交互（hover 出的删除图标 → 二次确认）尚未真机联调。 */
 export async function deleteChapter(input) {
-    assertCookies();
+    assertWriteReady();
     const session = await openSession(input.headless ?? true, chapterManageUrl(input.bookId));
     if (isError(session))
         return { ok: false, action: "error", message: session.error };

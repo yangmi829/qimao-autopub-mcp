@@ -172,4 +172,14 @@ export function assertCookies() {
         throw new Error(`缺少 cookies 文件：${cookiesPath()}。先执行 login_qimao 登录，或用 set_qimao_cookies 导入。`);
     }
 }
+/** 写操作前置校验：cookies + 浏览器可用（写接口只能驱动真实页面，不能纯 HTTP） */
+export function assertWriteReady() {
+    assertCookies();
+    if (!browserEnabled()) {
+        throw new Error("浏览器已被 QIMAO_ENABLE_BROWSER=0 关闭：写操作必须驱动真实页面，本次未执行。");
+    }
+    if (!puppeteerAvailable()) {
+        throw new Error("未安装浏览器驱动（puppeteer-core）：写操作必须驱动真实页面，本次未执行。请在项目目录执行 `npm i puppeteer-core`。");
+    }
+}
 export { cookiesSummary };

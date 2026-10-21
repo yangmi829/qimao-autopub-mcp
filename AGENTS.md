@@ -30,6 +30,7 @@
 - Node ≥ 20；ESM（`"type": "module"`）。
 - `puppeteer-core`（optionalDependency）+ 本机 Chrome/Edge；路径用 `QIMAO_CHROME_PATH`，否则自动探测常见安装位置。
 - 只读工具需要有效登录态 `data/qimao_cookies.json`（由 `login_qimao` 生成，或 `set_qimao_cookies` 导入）。写工具还需要浏览器。**`get_publish_status` 是权威自检**：`ready=true` → 只读可用；`browser_ready=true` → 写可用。
+- **`QIMAO_ENABLE_BROWSER=0` 现在会连带挡住写操作**：写服务统一走 `services/auth.ts:assertWriteReady()`（cookies + 浏览器开关 + puppeteer 三项），缺一项直接拒绝。2026-10-20 之前只有 `assertCookies()`，该开关挡不住写——联调时曾误建一篇真作品（已删），别再依赖「关了浏览器就安全」的旧印象。只读工具仍然照常可用（它们走纯 HTTP）。
 - **改了 `src/` 后，跑着的 MCP 服务不会自动换新代码**：连接器里的 `node dist/index.js` 是启动时就把代码加载完的长驻进程，不重启就一直用旧 `dist/`（症状是「改了没生效 / 又复现了」）。改用 `node scripts/mcp-cli.mjs <tool>` 验证——那是新进程，拿到的是当前 `dist/`。
 
 ## ⚠️ 硬约束（不了解必踩坑）

@@ -12,7 +12,7 @@ import {
   waitForText,
   visibleModalText,
 } from "../browser/page.js";
-import { assertCookies } from "./auth.js";
+import { assertCookies, assertWriteReady } from "./auth.js";
 import { cleanBookTitle } from "../core/text.js";
 
 export type BookKind = "long" | "short";
@@ -407,7 +407,7 @@ export async function resolveClientName(clientId: string): Promise<string | unde
  * 未显式传入的会填默认值并在 `filled` 里标注 `(默认)`，避免「按钮一直灰着」的迷惑失败。
  */
 export async function createBook(input: CreateBookInput): Promise<WriteResult> {
-  assertCookies();
+  assertWriteReady();
   const session = await openSession(input.headless ?? true, "/front/book-manage");
   if (isError(session)) return { ok: false, action: "error", message: session.error };
   const { browser, page } = session;
@@ -682,7 +682,7 @@ export interface UpdateBookInfoInput {
  * ⚠️ 「保存」按钮的真实文案（`确认创建` / `保存` / `立即修改`）尚未真机联调，见下方候选。
  */
 export async function updateBookInfo(input: UpdateBookInfoInput): Promise<WriteResult> {
-  assertCookies();
+  assertWriteReady();
   const short = await isShortBook(input.bookId);
   const path = short ? shortStoryInfoUrl(input.bookId) : bookInfoUrl(input.bookId);
   const pageName = short ? "短篇信息页" : "作品信息页";

@@ -5,7 +5,7 @@ import { readForm } from "../browser/form.js";
 import { realClickText, realClickByJs, fillInput, visibleModalText, visibleToastText, acceptPublishConfirm, clickAgreementIfPresent, waitForText, describeAiDeclaration, } from "../browser/page.js";
 import { logger } from "../core/logger.js";
 import { countCjk, toPlainText, cleanBookTitle } from "../core/text.js";
-import { assertCookies } from "./auth.js";
+import { assertCookies, assertWriteReady } from "./auth.js";
 import { fillBookInfoFields, jsFormItemRadio, readCreateFormState } from "./book.js";
 import { CHAPTER_SELECTORS, readEditorState } from "./chapter.js";
 /**
@@ -106,7 +106,7 @@ export function validateShortContent(content) {
  * ⚠️ 本工具只建「短篇壳」；正文请建好后用 `publishShortStory`（带 bookId）发布。
  */
 export async function createShortStory(input) {
-    assertCookies();
+    assertWriteReady();
     const session = await openSession(input.headless ?? true, shortManageUrl());
     if (isError(session))
         return { ok: false, action: "error", message: session.error };
@@ -307,7 +307,7 @@ export async function createShortStory(input) {
  * ⚠️ 编辑器「边输入边自动保存」，所以 `confirm=false` **只读现状 + 截图，绝不填充**。
  */
 export async function publishShortStory(input) {
-    assertCookies();
+    assertWriteReady();
     if (!input.bookId) {
         if (!input.title)
             return { ok: false, action: "error", message: "需提供 book_id（发布已有短篇），或 title（新建短篇）。" };
@@ -594,7 +594,7 @@ function jsRowDeletePoint(title) {
  * ⚠️ 行内没有 book_id，必须**先读列表拿书名**再按书名定位（否则会误删列表第一行）。
  */
 export async function deleteShortStory(bookId, opts = {}) {
-    assertCookies();
+    assertWriteReady();
     let title = "";
     let before = 0;
     try {

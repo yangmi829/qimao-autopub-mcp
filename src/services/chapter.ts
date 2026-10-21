@@ -15,7 +15,7 @@ import {
   type AiDeclarationOutcome,
 } from "../browser/page.js";
 import { logger } from "../core/logger.js";
-import { assertCookies } from "./auth.js";
+import { assertCookies, assertWriteReady } from "./auth.js";
 import { cleanChapterTitle, countCjk, toPlainText } from "../core/text.js";
 
 export interface ChapterSummary {
@@ -227,7 +227,7 @@ export async function readEditorState(page: any): Promise<Record<string, any>> {
  *    —— 一输入就可能改动线上正文。`confirm=true` 才填入并提交。
  */
 export async function writeChapter(input: WriteChapterInput): Promise<WriteChapterResult> {
-  assertCookies();
+  assertWriteReady();
   const target = chapterEditUrl(input.bookId, input.chapterId);
   const session = await openSession(input.headless ?? true, target);
   if (isError(session)) return { ok: false, action: "error", message: session.error };
@@ -497,7 +497,7 @@ export async function deleteChapter(input: {
   confirm?: boolean;
   headless?: boolean;
 }): Promise<WriteChapterResult> {
-  assertCookies();
+  assertWriteReady();
   const session = await openSession(input.headless ?? true, chapterManageUrl(input.bookId));
   if (isError(session)) return { ok: false, action: "error", message: session.error };
   const { browser, page } = session;
