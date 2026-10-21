@@ -274,7 +274,7 @@ export interface BatchPublishOptions {
   articleIds?: string[];
   limit?: number;
   intervalSeconds?: number;
-  /** 发布确认弹窗的「内容声明」：默认 true＝含AI生成内容；false 才选本人原创 */
+  /** 发布确认弹窗的「内容声明」：默认 false＝本人原创；true 才选含AI生成内容 */
   useAI?: boolean;
   confirm?: boolean;
   headless?: boolean;

@@ -451,10 +451,10 @@ export async function publishShortStory(input) {
                 break;
             }
             // ④ 确认链：publish 两层确认；draft 先点掉「重要提醒」。
-            //    确认前先处理「内容声明」：有 AI 选项默认选肯定项（use_ai=false 才选本人原创）。
+            //    确认前先处理「内容声明」：默认选「本人原创」（use_ai=true 才选「含AI生成内容」）。
             if (mode === "publish") {
                 confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
-                    useAI: input.useAI !== false,
+                    useAI: input.useAI === true,
                     onAi: (r) => (aiDeclaration = r),
                 });
                 if (confirmed.length === 0 && /重复内容|重复率/.test(await visibleModalText(page))) {

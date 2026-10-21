@@ -113,10 +113,10 @@ npx -y qimao-autopub-mcp@latest --selfcheck
 | 工具 | 说明 |
 | --- | --- |
 | `list_chapters_qimao` | 章节列表（顺带返回卷列表） |
-| `add_chapter_qimao` | 新增章节（正文可用 `content` / `file_path` / `article_id`；支持定时；`use_ai` **默认 true＝内容声明选「含AI生成内容」**） |
+| `add_chapter_qimao` | 新增章节（正文可用 `content` / `file_path` / `article_id`；支持定时；`use_ai` **默认 false＝内容声明选「本人原创」**，显式 true 才选「含AI生成内容」） |
 | `update_chapter_qimao` | 修改章节（同样支持 `use_ai`） |
 | `delete_chapter_qimao` | 删除章节（默认预览） |
-| `batch_publish_chapters` | 从本地文稿库批量发章（`confirm=false` 只演练第 1 章；`use_ai` 默认 true） |
+| `batch_publish_chapters` | 从本地文稿库批量发章（`confirm=false` 只演练第 1 章；`use_ai` 默认 false＝本人原创） |
 
 发布章节前平台有三个硬门：**章节名非空**、正文 ≥1000 字、**章节序号与已发布章节连续**。缺少章节名时点「立即发布」**毫无反应**（也没有提示），所以工具会先检查章节名；若平台弹「检测到章节序号不连续」，工具**不会**替你点「更正序号去发布」，而是返回 `action=aborted` 并附弹窗原文，由你改好章节号后重发（或用 `update_chapter_qimao` 修）。
 
@@ -125,7 +125,7 @@ npx -y qimao-autopub-mcp@latest --selfcheck
 | --- | --- |
 | `list_short_stories_qimao` / `get_short_story_qimao` | 短篇列表 / 详情 |
 | `create_short_story_qimao` | 新建短篇壳（名称 / 目标读者 / 分类 / 标签 / 主角名 / 简介；默认只预览） |
-| `publish_short_story_qimao` | 发正文（`mode=publish` 立即发布 / `mode=draft` 存草稿；`use_ai` 默认 true） |
+| `publish_short_story_qimao` | 发正文（`mode=publish` 立即发布 / `mode=draft` 存草稿；`use_ai` 默认 false＝本人原创） |
 | `delete_short_story_qimao` | 删除短篇 / 草稿（默认预览；按书名定位该行再删） |
 
 短篇与长篇的差异（已在真机上确认）：
@@ -135,12 +135,12 @@ npx -y qimao-autopub-mcp@latest --selfcheck
 - **正文字数门 4000–70000 字**（来自 `/api/pc/v1/global/config` 的 `client_config[5].word_count`，与页面文案一致）。
 - **发布要过三步**：①「立即发布」→ 弹「章节格式不满足发布要求，是否智能分章？」→「开始拆分」；②「智能分章结果」→「保存分章结果」；③ 再「立即发布」→ 平台查重（重复率高会直接拦下）→ 两层确认。`mode=draft` 只需「存为草稿」。
 
-### AI / 创作声明默认取肯定项
+### AI / 创作声明默认选「本人原创」
 
 七猫长篇的发布确认弹窗里有「内容声明」下拉（平台配置：`本人原创` / `含AI生成内容`），代码默认值是 `0`＝**未选**。本服务在点「确认发布」之前会自动处理：
 
-- **默认 `use_ai=true` → 选「含AI生成内容」**（平台若改文案，`是 / AI生成 / AI辅助创作 / 人工智能生成` 等同义肯定项都能命中）；
-- 只有显式传 `use_ai=false` 才选「本人原创 / 否」；
+- **默认 `use_ai=false` → 选「本人原创」**（平台若改文案，`否 / 非AI生成 / 人工创作` 等同义否定项都能命中）；
+- 只有显式传 `use_ai=true` 才选「含AI生成内容 / 是」；
 - 页面没有该字段（例如短篇）时自动跳过，并在返回消息里写明 `内容声明：本页无…字段，跳过`，不当作失败。
 
 ### 数据 / 收益（只读 HTTP）

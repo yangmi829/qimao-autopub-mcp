@@ -117,7 +117,7 @@ export function registerShortStoryTools(server) {
             file_path: z.string().optional().describe("正文文件路径（UTF-8 文本；与 content/article_id 三选一）"),
             article_id: z.string().optional().describe("本地文稿库 article_id（只在七猫库内有效；跨平台请各自 save_article）"),
             mode: z.enum(["publish", "draft"]).optional().describe("publish＝立即发布（默认，需 ≥4000 字），draft＝存为草稿"),
-            use_ai: z.boolean().optional().describe("「内容声明」是否选 AI 肯定项：**默认 true＝含AI生成内容 / 是**（有 AI 字眼的选项一律取肯定项）；显式 false 才选「本人原创 / 否」。短篇页没有该字段时自动跳过"),
+            use_ai: z.boolean().optional().describe("「内容声明」：**默认 false＝本人原创 / 否**；显式 true 才选「含AI生成内容 / 是」。短篇页没有该字段时自动跳过"),
             category: z.string().optional().describe("一级分类名称（新建时用）"),
             category_sub: z.string().optional().describe("二级分类名称（新建时用）"),
             tags: z.array(z.string()).optional().describe("标签名称，按分组顺序取用（新建时用）"),

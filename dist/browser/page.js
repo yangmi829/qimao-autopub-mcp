@@ -174,8 +174,8 @@ export async function visibleSelectOptions(page) {
  *
  * 七猫现版（2026-10 真机读 `/api/author/global-data`）：
  *   `disclaimer_type = [{label:"本人原创",value:"1"},{label:"含AI生成内容",value:"2"}]`
- * 业务要求：**只要平台出现 AI 相关声明，默认一律选肯定项**（含AI生成内容 / 是 / AI生成），
- * 显式传 useAI=false 才选否定项（本人原创 / 否）。平台若改文案，往这里加候选即可。
+ * 当前业务约定：**默认选否定项**（本人原创 / 否），
+ * 显式传 useAI=true 才选肯定项（含AI生成内容 / 是 / AI生成）。平台若改文案，往这里加候选即可。
  */
 export const AI_DECLARATION_YES = ["含AI生成内容", "AI生成", "AI辅助创作", "AI创作", "人工智能生成", "是"];
 export const AI_DECLARATION_NO = ["本人原创", "非AI生成", "不是AI生成", "人工创作", "否"];
@@ -201,7 +201,7 @@ export function describeAiDeclaration(r) {
     }
 }
 /**
- * 在可见弹窗里找「内容声明 / 创作声明」并选中目标项（默认 AI 肯定项）。
+ * 在可见弹窗里找「内容声明 / 创作声明」并选中目标项（默认选否定项「本人原创」）。
  *
  * 真机结构（2026-10）：发布确认弹窗 `el-dialog.qm-pop` 里是
  *   `<div class="chapter-detail-item"><span class="label"><span class="label-text">内容声明</span>…</span>
@@ -212,7 +212,7 @@ export function describeAiDeclaration(r) {
  * ⚠️ 必须真实鼠标点：Vue 2 只认原生事件；直接用 JS 改 v-model 不会被提交。
  * 找不到该字段时返回 `absent`（短篇/部分渠道本就没有，不报错）。
  */
-export async function applyAiDeclaration(page, useAI = true, timeoutMs = 6000) {
+export async function applyAiDeclaration(page, useAI = false, timeoutMs = 6000) {
     const want = (useAI ? AI_DECLARATION_YES : AI_DECLARATION_NO).map(normAiText);
     const deadline = Date.now() + timeoutMs;
     let last = { status: "absent" };
@@ -523,8 +523,8 @@ export async function waitForPublishGate(page, timeoutMs = 12000) {
  *
  * 返回每轮实际点中的按钮文案（按顺序）。
  *
- * `opts.useAI`（默认 true）会在确认前处理弹窗里的「内容声明 / 创作声明」：
- * 平台只要有 AI 相关选项，一律先选肯定项（含AI生成内容 / 是），再点「确认发布」。
+ * `opts.useAI`（默认 false）会在确认前处理弹窗里的「内容声明 / 创作声明」：
+ * 默认选否定项（本人原创 / 否）；显式 true 才选肯定项（含AI生成内容 / 是）。
  * `opts.onAi` 用于把实际选中的文案带回给调用方（写进返回消息，便于复核）。
  */
 export async function acceptPublishConfirm(page, rounds = 4, shouldStop, opts = {}) {
@@ -538,7 +538,7 @@ export async function acceptPublishConfirm(page, rounds = 4, shouldStop, opts = 
         const dialogReady = await waitForPublishDialog(page, i === 0 ? 12000 : 2500);
         // 内容声明必须在点「确认发布」之前选好（真机默认是未选 "0"，漏了等于不声明）
         if (!aiDone && dialogReady) {
-            const ai = await applyAiDeclaration(page, opts.useAI !== false, 3000);
+            const ai = await applyAiDeclaration(page, opts.useAI === true, 3000);
             aiDone = true;
             opts.onAi?.(ai);
             if (ai.status === "option-missing" || ai.status === "click-failed") {

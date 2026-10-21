@@ -301,7 +301,7 @@ export async function writeChapter(input) {
         // ★ 二次确认弹窗（真机确认是**两层**）：点「立即发布」→ 弹窗①「请核对上下文内容」+确认发布
         //   → 点确认发布 → 弹层②「重要提醒」+『我已阅读并知晓』→ 再点确认发布 → 才真正发布。
         //   只做一层会「点了但章节还是草稿」——这是本工具最初踩的坑。
-        //   「内容声明」就在这一层：默认选「含AI生成内容」（use_ai=false 才选「本人原创」）。
+        //   「内容声明」就在这一层：默认选「本人原创」（use_ai=true 才选「含AI生成内容」）。
         let confirmed = [];
         let aiDeclaration;
         if (mode === "publish" || mode === "schedule") {
@@ -327,7 +327,7 @@ export async function writeChapter(input) {
                 };
             }
             confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
-                useAI: input.useAI !== false,
+                useAI: input.useAI === true,
                 onAi: (r) => (aiDeclaration = r),
             });
         }

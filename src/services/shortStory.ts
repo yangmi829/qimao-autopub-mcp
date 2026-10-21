@@ -157,8 +157,8 @@ export interface WriteShortInput {
   /** 提交方式：publish＝立即发布（默认，需 ≥4000 字），draft＝存为草稿 */
   mode?: "publish" | "draft";
   /**
-   * 发布确认弹窗里的「内容声明」：**默认 true＝选 AI 肯定项（含AI生成内容 / 是）**；
-   * 显式 false 才选否定项（本人原创 / 否）。短篇页目前没有该字段时自动跳过。
+   * 发布确认弹窗里的「内容声明」：**默认 false＝选「本人原创 / 否」**；
+   * 显式 true 才选肯定项（含AI生成内容 / 是）。短篇页目前没有该字段时自动跳过。
    */
   useAI?: boolean;
   confirm?: boolean;
@@ -547,10 +547,10 @@ export async function publishShortStory(input: WriteShortInput): Promise<WriteSh
       }
 
       // ④ 确认链：publish 两层确认；draft 先点掉「重要提醒」。
-      //    确认前先处理「内容声明」：有 AI 选项默认选肯定项（use_ai=false 才选本人原创）。
+      //    确认前先处理「内容声明」：默认选「本人原创」（use_ai=true 才选「含AI生成内容」）。
       if (mode === "publish") {
         confirmed = await acceptPublishConfirm(page, 4, () => publishDone, {
-          useAI: input.useAI !== false,
+          useAI: input.useAI === true,
           onAi: (r) => (aiDeclaration = r),
         });
         if (confirmed.length === 0 && /重复内容|重复率/.test(await visibleModalText(page))) {
