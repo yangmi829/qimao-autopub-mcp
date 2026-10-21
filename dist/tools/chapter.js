@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { fromService, fail } from "../core/result.js";
 import { listChapters, uploadChapter, deleteChapter, listVolumes } from "../services/chapter.js";
-import { batchPublishChapters, resolveContent } from "../services/library.js";
+import { batchPublishChapters, resolveContent, missingArticleMessage } from "../services/library.js";
 import { articles, nowIso } from "../core/store.js";
 export function registerChapterTools(server) {
     server.registerTool("list_chapters_qimao", {
@@ -53,7 +53,7 @@ export function registerChapterTools(server) {
         if (args.article_id) {
             const art = await articles.get(args.article_id);
             if (!art)
-                return fail(`本地文稿库未找到 article_id=${args.article_id}`);
+                return fail(missingArticleMessage(args.article_id));
             content = art.content;
         }
         else if (!content && args.file_path) {
@@ -114,7 +114,7 @@ export function registerChapterTools(server) {
         if (args.article_id) {
             const art = await articles.get(args.article_id);
             if (!art)
-                return fail(`本地文稿库未找到 article_id=${args.article_id}`);
+                return fail(missingArticleMessage(args.article_id));
             content = art.content;
         }
         else if (!content && args.file_path) {

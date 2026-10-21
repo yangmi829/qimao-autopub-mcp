@@ -12,13 +12,13 @@ import {
   SHORT_BEST_RANGE,
 } from "../services/shortStory.js";
 import { articles, nowIso } from "../core/store.js";
-import { resolveContent } from "../services/library.js";
+import { resolveContent, missingArticleMessage } from "../services/library.js";
 
 /** article_id / file_path / content 三选一取正文 */
 async function pickContent(args: { content?: string; file_path?: string; article_id?: string }): Promise<string> {
   if (args.article_id) {
     const art = await articles.get(args.article_id);
-    if (!art) throw new Error(`本地文稿库未找到 article_id=${args.article_id}`);
+    if (!art) throw new Error(missingArticleMessage(args.article_id));
     return art.content;
   }
   if (args.content) return args.content;

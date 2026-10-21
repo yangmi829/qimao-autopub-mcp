@@ -2,13 +2,13 @@ import { z } from "zod";
 import { fromService, fail } from "../core/result.js";
 import { listShortStories, getShortStory, createShortStory, publishShortStory, deleteShortStory, SHORT_MIN_WORDS, SHORT_MAX_WORDS, SHORT_BEST_RANGE, } from "../services/shortStory.js";
 import { articles, nowIso } from "../core/store.js";
-import { resolveContent } from "../services/library.js";
+import { resolveContent, missingArticleMessage } from "../services/library.js";
 /** article_id / file_path / content 三选一取正文 */
 async function pickContent(args) {
     if (args.article_id) {
         const art = await articles.get(args.article_id);
         if (!art)
-            throw new Error(`本地文稿库未找到 article_id=${args.article_id}`);
+            throw new Error(missingArticleMessage(args.article_id));
         return art.content;
     }
     if (args.content)

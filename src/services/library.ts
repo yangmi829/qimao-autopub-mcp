@@ -30,6 +30,15 @@ export function resolveContent(content?: string, filePath?: string): { text: str
   throw new Error("缺少正文：请提供 content 或 file_path。");
 }
 
+/**
+ * 文稿库 id 查不到时的统一文案。
+ * ⚠️ 两个 MCP 的文稿库互相隔离，id 都是 `art_` 开头、肉眼分不出平台 →
+ * 必须点明「只在当前库有效」，否则跨平台调用只会看到一句「未找到」。
+ */
+export function missingArticleMessage(id: string): string {
+  return `本地文稿库未找到 article_id=${id}（article_id 只在当前 MCP 的文稿库内有效，跨平台请各自用 save_article 入库）`;
+}
+
 /* ------------------------------ 文稿库 CRUD ------------------------------ */
 
 export interface SaveArticleInput {
