@@ -139,6 +139,14 @@ try {
     `实际=${client.getServerVersion()?.version} 期望=${PKG_VERSION}`
   );
 
+  // 0.1) server instructions：跨工具约定（确认制 / AI 声明 / article_id 优先）必须随握手返回
+  const instructions = client.getInstructions() ?? "";
+  check(
+    "server instructions 非空",
+    instructions.trim().length > 100,
+    `实际长度=${instructions.trim().length}`
+  );
+
   // 1) 工具清单
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);

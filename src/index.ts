@@ -20,8 +20,26 @@ const SERVER_VERSION = PACKAGE_VERSION;
 const TOOL_COUNT = 30;
 const RESOURCE_COUNT = 8;
 
+/**
+ * MCP 握手时返回给客户端的跨工具使用约定。
+ * 只写「所有工具都适用」的元规则；单工具细节留在 tools/* 的描述里，避免两处漂移。
+ */
+const INSTRUCTIONS = [
+  "七猫小说（zuozhe.qimao.com）作者后台自动发布服务。只操作七猫，不要与本机番茄（fanqie）服务的工具混用。",
+  "1) 只读工具走纯 HTTP，需要有效登录 cookies；写工具还需要浏览器可用。先看 get_publish_status 的 ready / browser_ready。",
+  "2) 写操作默认 confirm=false：只打开页面读现状 + 截图，不输入、不提交。把预览结果交给用户确认后，再用同样的参数加 confirm=true 重调。",
+  "3) 「内容声明」默认「含AI生成内容」；只有用户明确要求「本人原创 / 否」才传 use_ai=false。",
+  "4) 正文优先用本地文稿库 article_id（先用 save_article 入库），其次 file_path，最后 content。",
+  "5) 分类 / 标签先用 list_book_options_qimao 查准确名称；未匹配会中止，不会静默改成别的分类。",
+  "6) 发布 / 修改前按需读资源 qimao://publish-rules；赛道与前三章方法见 qimao://genres、qimao://golden-three-chapters。",
+  "7) 发布成功后按返回的「下一步」提醒用户去作者后台完成签约 / 查看审核——签约与审核只能用户本人操作。",
+].join("\n");
+
 export function buildServer(): McpServer {
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const server = new McpServer(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { instructions: INSTRUCTIONS }
+  );
 
   registerAuthTools(server);
   registerBookTools(server);
